@@ -54,6 +54,7 @@ docs/  tasks/
 ## Conventions
 
 - **Domain logic is pure.** Functions in `src/domain/` take state and input and return new state and output. They never read the clock (pass `nowMs` in), never do I/O and never throw for expected outcomes. Return a result object instead.
+- **Time inputs fail closed.** Every function that takes `nowMs`, a timestamp or a duration treats a non-finite value (`NaN`, `Infinity` or `-Infinity`) as a failure and fails closed, the way the webhook signature and session token checks treat a broken clock.
 - **Actors are thin adapters.** An actor method loads its state, calls the domain function, saves the result, sets or clears its alarm and returns. All rules live in the domain function and are unit-tested there.
 - **Routing is strict.** Each function matches exact method and path pairs. Anything else returns 404 before any KV or actor access. Authentication (signature, bearer token or internal key) runs before any state access.
 - **KV keys** come only from `packages/shared/src/kv-keys.ts`. Keys allow `a-z A-Z 0-9 - _ / = .` only, so never put `+` or `:` in a key.

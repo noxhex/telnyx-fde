@@ -27,6 +27,8 @@ Test every limit at its boundary, with one value exactly at the limit and one ju
 
 Tests must be deterministic. Inject the clock and randomness, generate any keys inside the test, and use the fakes in `packages/shared/test/fakes/`.
 
+Use the real types the card names, such as the binding types in `@telnyx/edge-runtime`, and never invent an interface the card does not define. Model async work with promises the test holds pending and settles by hand, never with real time or sleeps.
+
 It is expected that your tests fail for now, because the implementation does not exist yet. Make sure they fail for the right reason, a missing module or a wrong result, and never because of a syntax error in the test.
 
 Finish with a short report listing each test and the acceptance criterion it covers.
