@@ -17,8 +17,13 @@ A fake ISP back office that the other functions call over HTTP, like a real CRM 
 - `functions/mock-crm/telnyx.toml` (KV binding `KV`, secrets `INTERNAL_KEY` and `DEMO_CALLER_PHONE`).
 - `functions/mock-crm/src/index.ts`, `src/routes/customers.ts`, `src/routes/accounts.ts`, `src/routes/lines.ts`, `src/domain/fixtures.ts`, `src/domain/line-test.ts`, `src/auth.ts`, `src/flags.ts`.
 - `functions/mock-crm/test/*.test.ts`.
+- `packages/shared/package.json`, the `package.json` of each of the three functions, and `package-lock.json`, to add zod.
 
 Take the KV namespace id from `infra/ids.json` (key `kvNamespaceId`). If it is missing, stop and ask, because Thiago creates the namespace by hand.
+
+## zod
+
+This is the first card that validates external input, so it installs zod for the whole repo. Add `zod` at one exact version, the current stable release with no `^` or `~`, as a dependency of `packages/shared` and of each function in `functions/`, all on the same version. Later cards (T08, T09) then import it without touching package files. Here it validates the query and path parameters and the flags read back from KV.
 
 ## Routes
 
