@@ -176,6 +176,28 @@ DeepSeek-V4-Flash-0731   16384                          stop      14250         
 
 **Design impact.** `CLAUDE.md`, where a cut-off review gets one rerun with `--review-only` and a second cut-off on the same card goes to Thiago. The three agent files, which set `max_tokens`. GLM-5.3 stays the reviewer and does not write code (ADR-018).
 
+## 8. A flaky timing test hid a measurement bug
+
+**Date** 9 Oct 2026 · **Area** Tests, `packages/shared` timing
+
+**Symptom.** T02 attempt 1 failed `npm run check` on one test. It slept 10 ms of real time, expected at least 10 ms and got 9. The other timing tests passed.
+
+**Evidence.**
+
+```text
+× startTimings > measures real wall time for asynchronous work
+  → expected 9 to be greater than or equal to 10
+
+# Claude Code's probe on the same code: two kv calls, both pending while an injected clock moves 30 ms
+expected {"total":30,"kv":60}   got {"total":30,"kv":0}
+```
+
+**Cause.** The tester, DeepSeek-V4-Flash-0731, modelled asynchronous work as clock jumps inside the wrapped function, before its promise existed, so its "parallel" calls never overlapped. One test slept for real instead. To pass both, the implementer read the injected clock when the wrapped function returned its promise instead of when the promise settled, and added `performance.now()` as a second clock. Overlapping calls then measured 0 on the injected clock, and the code read the real clock even with a clock injected.
+
+**Fix.** The feedback on attempt 1 asked for one clock, read when a call starts and again when it settles, and for timing tests that advance the fake clock while the test holds the promises pending. No test sleeps now, and the probe gives 60.
+
+**Design impact.** None.
+
 ## S1 measurements
 
 Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings and cold starts.
