@@ -1,0 +1,14 @@
+{
+  "name": "voice-context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Call setup webhook and Route call tool webhook",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duinvezel/shared": "0.1.0",
+    "@telnyx/edge-runtime": "0.16.0"
+  }
+}

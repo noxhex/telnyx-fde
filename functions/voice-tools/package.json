@@ -1,0 +1,14 @@
+{
+  "name": "voice-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for the assistant's tools; owns the actor classes",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duinvezel/shared": "0.1.0",
+    "@telnyx/edge-runtime": "0.16.0"
+  }
+}

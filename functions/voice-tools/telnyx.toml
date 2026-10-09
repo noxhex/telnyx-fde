@@ -1,0 +1,7 @@
+name = "voice-tools"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[edge_compute]
+func_id = "11c54a81-062d-4412-bfe6-bf93c10cbe32"
+func_name = "voice-tools"

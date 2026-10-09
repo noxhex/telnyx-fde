@@ -1,0 +1,20 @@
+{
+  "kvNamespaceId": null,
+  "functions": {
+    "voice-context": {
+      "name": "voice-context",
+      "funcId": "00d2df1a-d987-43f8-a35d-f08c80d2c534",
+      "invokeUrl": "https://voice-context-00d2df1a-d.telnyxcompute.com"
+    },
+    "voice-tools": {
+      "name": "voice-tools",
+      "funcId": "11c54a81-062d-4412-bfe6-bf93c10cbe32",
+      "invokeUrl": "https://voice-tools-11c54a81-0.telnyxcompute.com"
+    },
+    "mock-crm": {
+      "name": "mock-crm",
+      "funcId": "26584f2f-d158-40b5-98ce-72f84c4e6690",
+      "invokeUrl": "https://mock-crm-26584f2f-d.telnyxcompute.com"
+    }
+  }
+}

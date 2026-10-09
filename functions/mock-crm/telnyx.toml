@@ -1,0 +1,7 @@
+name = "mock-crm"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[edge_compute]
+func_id = "26584f2f-d158-40b5-98ce-72f84c4e6690"
+func_name = "mock-crm"

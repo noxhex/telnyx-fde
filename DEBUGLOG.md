@@ -116,6 +116,30 @@ be378fe6-fb1b-4d9e-bf65-540d5b97c2c9   fde-smoke   provision_ok   Oct 9, 2026, 1
 
 **Design impact.** ADR-015. A timeout on a write is an unknown outcome, so every record-creating write takes a dedupe key, and Telnyx API creates send an `Idempotency-Key`.
 
+## 6. Docker bridge networking failed after a kernel update
+
+**Date** 9 Oct 2026 · **Area** Local dev, Docker
+
+**Symptom.** In T01 attempt 1, `telnyx-edge dev` built the bundle, but its compose stack never became healthy. Every container on a bridge network failed the same way, `docker run hello-world` included.
+
+**Evidence.**
+
+```text
+$ telnyx-edge dev --no-watch --port 8787
+Error response from daemon: failed to set up container networking: failed to create endpoint telnyx-dev-voice-context-1c9b78b3-actor-net-1 on network telnyx-dev-voice-context-1c9b78b3_default: failed to add the host (veth4c83ee3) <=> sandbox (vethf7682df) pair interfaces: operation not supported
+Error: ❌ the stack did not become healthy
+$ docker run --rm hello-world
+docker: Error response from daemon: failed to set up container networking: failed to create endpoint zen_banach on network bridge: failed to add the host (veth9c736c2) <=> sandbox (veth23d2fc4) pair interfaces: operation not supported
+$ grep 'upgraded linux ' /var/log/pacman.log | tail -1
+[2026-10-09T09:12:11+0200] [ALPM] upgraded linux (7.2.8.arch1-2 -> 7.2.9.arch1-1)
+```
+
+**Cause.** The morning's `pacman -Syu` upgraded the kernel package and replaced the modules of the running kernel. The machine kept running 7.2.8 until a reboot at 18:40, so the kernel could not load the veth module that Docker needs to attach a container to a bridge network. Host networking does not use veth pairs, so it still worked.
+
+**Fix.** A reboot into 7.2.9. After it, `docker run hello-world` works, and T01 attempt 2 ran `telnyx-edge dev` for all three functions as the card says, each on port 8787 with the normal bridge network. Before the reboot, the implementer had worked around the failure in attempt 1. It staged each bundle with `telnyx-edge dev` and ran it on the same `function-runtime` image (`sha-d9144b8`) with `--network host`, on ports 8787 to 8789. That proved the shared import was bundled, but the dev stack itself never ran. The feedback for attempt 2 told the implementer to stop and report a broken environment instead of working around it.
+
+**Design impact.** None. After a kernel update, reboot before local dev work.
+
 ## S1 measurements
 
 Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings and cold starts.

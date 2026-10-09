@@ -2,5 +2,14 @@ node_modules/
 .env*
 *.log
 
+# Build output
+dist/
+*.tsbuildinfo
+coverage/
+
+# Telnyx Edge local dev state
+.telnyx-edge/
+.telnyx/
+
 # Card runs from tools/card.sh
 .runs/

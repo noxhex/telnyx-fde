@@ -18,6 +18,8 @@ One row per attempt at a card, filled in from the run summaries when a card is a
 |---|---|---|---|---|---|---|---|
 | 9 Oct | setup | build | Kimi-K3 | 1 | Answered a one-line prompt | | |
 | 9 Oct | setup | build | GLM-5.3 | 1 | Chained four tool calls and summarised the repo correctly, including the untracked plugin install | | |
+| 9 Oct | T01 | implementer, reviewer | Kimi-K3, GLM-5.3 | 1 | Check passed. The reviewer approved, but its verdict came after a preamble, so `card.sh` called it unclear (exit 2). Implementer 4m33s, reviewer 3m06s | `telnyx-edge dev` could not start its Docker network (DEBUGLOG issue 6). The implementer worked around it with host networking instead of stopping. `@telnyx/edge-runtime` stayed at `"latest"`, and `npm run check` skipped the root config | The implementer created the three functions one at a time and reported the workaround under Deviations. The reviewer checked the staged bundles itself and listed every gap as a numbered finding |
+| 9 Oct | T01 | implementer, reviewer | Kimi-K3, GLM-5.3 | 2 | Approved (exit 0). Implementer 1m51s in its continued session, reviewer 2m23s | The reviewer again wrote a preamble before its verdict, despite the sharper instruction. `verdict_of` found APPROVE on the ninth non-empty line | Numbered feedback with a file, a line and a done condition for each point. The implementer addressed all five points in seven changed lines, and proved the root typecheck with a deliberate type error that it then removed |
 
 ## Model bake-off on T03
 
@@ -36,6 +38,7 @@ Same card, same starting commit, same reviewer.
 What worked, what did not, and what made the models more reliable. Each observation names the card it came from.
 
 - **9 Oct, harness test.** `opencode run` falls back to the default `build` agent, with only a warning, when the named agent is missing. `tools/card.sh` therefore checks `opencode agent list` before every run and fails a run that fell back.
+- **9 Oct, T01.** GLM-5.3, as the reviewer, opened its final message with a summary before the verdict in both attempts, even after its instruction asked for a first line that holds only the verdict. `tools/card.sh` now takes the first verdict among the first ten non-empty lines, and `tools/card.sh --verdict <file>` shows what it reads. In attempt 2 the verdict was on the ninth non-empty line, so a slightly longer preamble would still read as unclear.
 - **9 Oct, harness test.** `opencode run --auto` approves every permission that is not explicitly denied, and that includes `external_directory`, which defaults to ask. The agents deny it, which blocks reads, writes and `cd` outside the repo. A shell redirect such as `echo x > /tmp/f` still goes through, because the check looks at paths in commands, not at redirect targets. In the same way `git -c user.name=x commit` gets past a `git commit*` deny rule. The permission rules are guardrails, not a sandbox, so `tools/card.sh` flags a moved HEAD and changes to process files, and every diff gets read.
 
 ## Cost

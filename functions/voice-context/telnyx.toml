@@ -1,0 +1,7 @@
+name = "voice-context"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[edge_compute]
+func_id = "00d2df1a-d987-43f8-a35d-f08c80d2c534"
+func_name = "voice-context"

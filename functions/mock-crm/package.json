@@ -1,0 +1,14 @@
+{
+  "name": "mock-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fake ISP back office (customers, accounts, line tests)",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duinvezel/shared": "0.1.0",
+    "@telnyx/edge-runtime": "0.16.0"
+  }
+}
