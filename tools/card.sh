@@ -504,6 +504,9 @@ else
     cat "$RUN/implementer.md"
     printf '\n\nThe task card follows.\n\n'
     cat "$CARD_TEXT"
+    # Repeated from the agent file and kept last, because in T01 the reviewer wrote a
+    # preamble before its verdict in both attempts.
+    printf '\n\nBegin your final message with APPROVE or CHANGES on a line of its own.\n'
   } >"$RUN/prompt-reviewer.md"
 
   run_step reviewer reviewer "$RUN/prompt-reviewer.md"
