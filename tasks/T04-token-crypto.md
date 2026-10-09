@@ -41,7 +41,7 @@ export function decryptForTests(value: string, key: Uint8Array): string;
 ## Behaviour
 
 - **Token format.** `v1.<base64url(JSON claims)>.<base64url(HMAC-SHA256 over "v1." + payload part)>`, with no padding.
-- **Verification.** Split into exactly three parts, check the version prefix, recompute the HMAC and compare with `timingSafeEqual`, then check `exp`. A token whose `exp` is at or before `nowMs` is expired. Never throw. Any parse problem is `malformed`.
+- **Verification.** Split into exactly three parts, check the version prefix, recompute the HMAC and compare with `timingSafeEqual`, then check `exp`. A token whose `exp` is at or before `nowMs` is expired, and so is any token when `nowMs` is not a finite number, so a broken clock fails closed. Claims need `v` 1, a string `sid` and a finite numeric `exp`, or the token is `malformed`. Only the canonical unpadded encoding of the signature verifies. Never throw. Any parse problem is `malformed`.
 - **Keys.** `parseKey` accepts base64url with or without `=` padding and throws unless the result is exactly 32 bytes.
 - **Encryption.** `encryptForTelnyx` returns base64url of a 12-byte random nonce, then the AES-256-GCM ciphertext, then the 16-byte tag, with no associated data. It throws if the plaintext is over 8192 bytes.
 - `decryptForTests` reverses it and throws on a wrong key or tampered data. It exists only for tests and spikes, so leave it out of production code paths.
@@ -49,7 +49,7 @@ export function decryptForTests(value: string, key: Uint8Array): string;
 ## Acceptance
 
 - [ ] `npm run check` passes.
-- [ ] Token tests cover a valid token, a tampered payload, a tampered signature, an expired token, the wrong number of parts, an unsupported version and bad base64.
+- [ ] Token tests cover a valid token, a tampered payload, a tampered signature, an expired token, the wrong number of parts, an unsupported version, bad base64, a `nowMs` that is `NaN` or infinite, an `exp` that is not finite, and a signature that differs from the canonical one only in its padding bits.
 - [ ] Encryption tests cover a round trip, a wrong key, one flipped byte anywhere in the value, a plaintext over 8192 bytes, key parsing with and without padding, and a key of the wrong length.
 - [ ] A fixed `randomBytes` in one test gives a deterministic output, so the format is pinned.
 
