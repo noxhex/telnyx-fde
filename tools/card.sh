@@ -5,6 +5,7 @@
 #   tools/card.sh tasks/T03-signature.md --no-tester --model telnyx/zai-org/GLM-5.3
 #   tools/card.sh tasks/T05-mock-crm.md --retry .runs/T05/feedback-1.md
 #   tools/card.sh tasks/S3-mcp-transport.md --no-tester --check "cd spikes/mcp-spike && npx tsc --noEmit"
+#   tools/card.sh tasks/T05-mock-crm.md --review-only --base main
 #
 # --verdict <review file> prints APPROVE, CHANGES or UNCLEAR for that file and runs nothing.
 #
@@ -13,6 +14,14 @@
 # run of this card on this branch, with the feedback. Then the check, `npm run check` unless
 # --check names another command (spikes). Then the reviewer reads the change, only if the
 # check passed.
+#
+# --review-only runs only the check and the reviewer, on the diff from --base (default HEAD)
+# to the working tree, for example to repeat a review that was cut off. It is recorded like
+# any run, but it is not an attempt, and --retry skips it.
+#
+# A step counts as cut off when its last step stopped at the output limit or it ended without
+# a final message. An implementer that leaves the diff empty counts as no change. Both are
+# failed agent runs (DEBUGLOG issue 7).
 #
 # Output goes to .runs/<card id>/<timestamp>/, with summary.json, each agent's final message,
 # raw events, session exports, check.log and diff.patch. .runs/<card id>/latest points to
@@ -25,7 +34,8 @@
 #   1  the check failed, no review
 #   2  the reviewer asked for changes, or its verdict was unclear
 #   3  usage or setup problem, nothing ran
-#   4  an agent run failed or timed out (model, network, spend limit)
+#   4  an agent run failed, timed out or was cut off (model, network, spend limit, output
+#      limit), or the implementer changed nothing
 #   129, 130, 143  stopped by a hangup, Ctrl-C or kill, with a partial summary
 #
 # Environment
@@ -67,9 +77,58 @@ verdict_of() {
   echo "${v:-UNCLEAR}"
 }
 
+# final_message <events file>. Prints the text of the last assistant message, which is how
+# the agent finished. Each step of a run is one message, so the text is empty when the last
+# step wrote none.
+final_message() {
+  jq -rRn '[inputs | fromjson? | objects | select(.part.messageID? != null)] as $e
+    | if ($e | length) == 0 then ""
+      else ($e | last | .part.messageID) as $m
+        | [$e[] | select(.type == "text" and .part.messageID == $m) | .part.text] | join("\n")
+      end' "$1" 2>/dev/null
+}
+
+# stop_reason <events file>. Prints why the last step ended, such as stop, tool-calls or
+# length.
+stop_reason() {
+  jq -rRn '[inputs | fromjson? | objects | select(.type == "step_finish") | .part.reason // "unknown"]
+    | last // ""' "$1" 2>/dev/null
+}
+
+# cut_off <events file> <final message file>. True when the last step stopped at the output
+# limit or the agent ended without a final message. OpenCode exits 0 in both cases.
+cut_off() {
+  [[ $(stop_reason "$1") == length ]] || ! grep -q '[^[:space:]]' "$2" 2>/dev/null
+}
+
+# tree_matches <commit>. True when the working tree, untracked files included, equals the
+# commit. .runs/ does not count.
+tree_matches() {
+  git diff --quiet "$1" -- . ':(exclude).runs' 2>/dev/null &&
+    [[ -z $(git ls-files --others --exclude-standard -- . ':(exclude).runs' 2>/dev/null) ]]
+}
+
+# newest_run. Prints the folder of the newest finished run of this card on this branch that
+# ran the implementer. Review-only runs and runs on other branches (the bake-off) are skipped.
+newest_run() {
+  local -a dirs
+  local d i
+  shopt -s nullglob
+  dirs=(".runs/$ID"/2*/)
+  shopt -u nullglob
+  for ((i = ${#dirs[@]} - 1; i >= 0; i--)); do
+    d=${dirs[i]%/}
+    if jq -e --arg b "$BRANCH" '.branch == $b and .review_only != true' "$d/summary.json" >/dev/null 2>&1; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------- arguments
 
-CARD="" NO_TESTER=0 MODEL="" FEEDBACK="" CHECK_CMD=""
+CARD="" NO_TESTER=0 MODEL="" FEEDBACK="" CHECK_CMD="" REVIEW_ONLY=0 BASE=""
 while (($#)); do
   case $1 in
     --no-tester) NO_TESTER=1 ;;
@@ -86,6 +145,12 @@ while (($#)); do
     --check)
       (($# >= 2)) || die 3 "--check needs a command"
       CHECK_CMD=$2
+      shift
+      ;;
+    --review-only) REVIEW_ONLY=1 ;;
+    --base)
+      (($# >= 2)) || die 3 "--base needs a commit, like main"
+      BASE=$2
       shift
       ;;
     --verdict)
@@ -106,6 +171,13 @@ done
 [[ -n $CARD ]] || usage 3
 [[ -f $CARD ]] || die 3 "card not found: $CARD"
 [[ -z $FEEDBACK || -f $FEEDBACK ]] || die 3 "feedback file not found: $FEEDBACK"
+if ((REVIEW_ONLY)); then
+  [[ -z $FEEDBACK && -z $MODEL ]] || die 3 "--review-only runs no implementer, so --retry and --model do not apply"
+elif [[ -n $BASE ]]; then
+  die 3 "--base only works with --review-only"
+fi
+REVIEW_ONLY_JSON=false
+((REVIEW_ONLY)) && REVIEW_ONLY_JSON=true
 
 CARD_ABS=$(realpath "$CARD")
 FEEDBACK_ABS=""
@@ -160,28 +232,23 @@ done
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || die 3 "the repository has no commit yet"
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo none)
 
+# The diff runs from the commit the run started at, or from --base in a review-only run.
+DIFF_BASE=$HEAD_SHA
+if ((REVIEW_ONLY)); then
+  DIFF_BASE=$(git rev-parse --verify --quiet "${BASE:-HEAD}^{commit}") || die 3 "unknown base ${BASE:-HEAD}"
+  if tree_matches "$DIFF_BASE"; then die 3 "nothing to review, the working tree equals ${BASE:-HEAD}"; fi
+fi
+
 # A fresh card starts from a clean tree, so the diff is exactly this card's work.
-if [[ -z $FEEDBACK ]]; then
+if [[ -z $FEEDBACK ]] && ((!REVIEW_ONLY)); then
   DIRTY=$(git status --porcelain -- . ':(exclude).runs')
   [[ -z $DIRTY ]] || die 3 "the working tree is not clean. Commit or stash first, or continue the last attempt with --retry <feedback file>"
 fi
 
-# A retry continues from the newest finished run of this card on this branch. Runs on other
-# branches (the bake-off) are skipped.
+# A retry continues from the newest finished run of this card on this branch.
 ATTEMPT=1 PREV_RUN="" IMPL_SESSION=""
 if [[ -n $FEEDBACK ]]; then
-  PREV_DIR=""
-  shopt -s nullglob
-  RUN_DIRS=(".runs/$ID"/2*/)
-  shopt -u nullglob
-  for ((i = ${#RUN_DIRS[@]} - 1; i >= 0; i--)); do
-    d=${RUN_DIRS[i]%/}
-    if jq -e --arg b "$BRANCH" '.branch == $b' "$d/summary.json" >/dev/null 2>&1; then
-      PREV_DIR=$d
-      break
-    fi
-  done
-  [[ -n $PREV_DIR ]] || die 3 "no finished run of $ID on branch $BRANCH to retry"
+  PREV_DIR=$(newest_run) || die 3 "no finished run of $ID on branch $BRANCH to retry"
   ATTEMPT=$(($(jq -r '.attempt // 1' "$PREV_DIR/summary.json") + 1))
   PREV_RUN=$(jq -r '.run' "$PREV_DIR/summary.json")
   IMPL_SESSION=$(jq -r '.steps.implementer.session // empty' "$PREV_DIR/summary.json")
@@ -192,6 +259,17 @@ if [[ -n $FEEDBACK ]]; then
     jq -e --arg s "$IMPL_SESSION" 'any(.[]; .id == $s)' >/dev/null 2>&1; then
     echo "note: implementer session $IMPL_SESSION is gone, starting a fresh session with the card"
     IMPL_SESSION=""
+  fi
+fi
+
+# A review-only run is not an attempt. The reviewer gets the report and the feedback of the
+# newest attempt of this card on this branch, when there is one.
+SRC_DIR="" SRC_RUN=""
+if ((REVIEW_ONLY)); then
+  ATTEMPT=null
+  if SRC_DIR=$(newest_run); then
+    SRC_RUN=$(jq -r '.run' "$SRC_DIR/summary.json")
+    [[ -n $CHECK_CMD ]] || CHECK_CMD=$(jq -r '.check_command // empty' "$SRC_DIR/summary.json")
   fi
 fi
 [[ -n $CHECK_CMD ]] || CHECK_CMD="npm run check"
@@ -230,6 +308,19 @@ process_fingerprint() {
   } 2>/dev/null | sha256sum | cut -d ' ' -f 1
 }
 
+# note_agent_effects. Flags changes to the process files and commits made since the run
+# started. Called after the implementer, or after the reviewer in a review-only run.
+note_agent_effects() {
+  if [[ $(process_fingerprint) != "$PROCESS_BEFORE" ]]; then
+    PROCESS_FILES_CHANGED=true
+    echo "             warning: tasks/, AGENTS.md, CLAUDE.md, .opencode/, tools/ or .claude/ changed during this run. See git status."
+  fi
+  if [[ $(git rev-parse HEAD) != "$HEAD_SHA" ]]; then
+    HEAD_MOVED=true
+    echo "             warning: HEAD moved during this run, so an agent committed. See git log. The diff is taken from ${DIFF_BASE:0:7}."
+  fi
+}
+
 # New files are marked intent-to-add while the run lasts, so `git diff` shows them to the
 # reviewer and in diff.patch. The marks come off at the end, because they break `git stash`.
 mark_new_files() {
@@ -258,12 +349,15 @@ write_summary() {
     --arg card "$ID" --arg card_file "$CARD_REL" --arg run "$STAMP" --argjson attempt "$ATTEMPT" \
     --arg retry_of "$PREV_RUN" --arg started "$STARTED" --arg finished "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg head "$HEAD_SHA" --arg branch "$BRANCH" --arg opencode "$OC_VERSION" \
+    --argjson review_only "$REVIEW_ONLY_JSON" --arg base "$DIFF_BASE" --arg review_of "$SRC_RUN" \
     --arg model_override "$MODEL" --arg check_command "$CHECK_CMD" --argjson steps "$steps" \
     --argjson check "$CHECK_JSON" --argjson diff "$DIFF_JSON" --arg verdict "$VERDICT" \
     --arg result "$RESULT" --argjson exit "$EXIT_CODE" --argjson head_moved "$HEAD_MOVED" \
     --argjson process_files_changed "$PROCESS_FILES_CHANGED" \
     '{card: $card, card_file: $card_file, run: $run, attempt: $attempt,
       retry_of: (if $retry_of == "" then null else $retry_of end),
+      review_only: $review_only, base: $base,
+      review_of: (if $review_of == "" then null else $review_of end),
       started: $started, finished: $finished, head: $head, branch: $branch, opencode: $opencode,
       model_override: (if $model_override == "" then null else $model_override end),
       check_command: $check_command, steps: $steps, check: $check, diff: $diff,
@@ -322,14 +416,16 @@ fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
 # run_step <step> <agent> <prompt file> [session id to continue]
 # Sets STEP_RC and STEP_SESSION, writes <step>.md (final message), <step>.jsonl, <step>.stderr
-# and <step>.export.json, and stores the step's record in STEP_JSON.
+# and <step>.export.json, and stores the step's record in STEP_JSON. A cut-off step gets
+# STEP_RC 98.
 run_step() {
   local step=$1 agent=$2 prompt=$3 session=${4:-}
-  local args=(run --agent "$agent" --format json --auto)
+  local args=(run --agent "$agent" --format json --auto) label="a$ATTEMPT"
+  ((REVIEW_ONLY)) && label=review
   if [[ -n $session ]]; then
     args+=(--session "$session")
   else
-    args+=(--title "$ID $step a$ATTEMPT $STAMP")
+    args+=(--title "$ID $step $label $STAMP")
   fi
   [[ $step == implementer && -n $MODEL ]] && args+=(--model "$MODEL")
 
@@ -344,11 +440,7 @@ run_step() {
   # One JSON object per line. Anything else (warnings, stray output) is skipped.
   local events='fromjson? | objects'
 
-  # The final message is the text of the last assistant message.
-  jq -rRn "[inputs | $events | select(.type == \"text\")]
-    | if length == 0 then \"\" else (last.part.messageID) as \$m
-      | map(select(.part.messageID == \$m) | .part.text) | join(\"\\n\") end" \
-    "$RUN/$step.jsonl" >"$RUN/$step.md" 2>/dev/null || : >"$RUN/$step.md"
+  final_message "$RUN/$step.jsonl" >"$RUN/$step.md" || : >"$RUN/$step.md"
 
   STEP_SESSION=$(jq -rRn "[inputs | $events | .sessionID // empty] | first // empty" "$RUN/$step.jsonl" 2>/dev/null)
   [[ -n $STEP_SESSION ]] || STEP_SESSION=$session
@@ -364,6 +456,15 @@ run_step() {
     STEP_RC=97
   fi
   if ((STEP_RC == 124 || STEP_RC == 137)); then timed_out=true; fi
+
+  # A step that stopped at the output limit, or ended without a final message, did not finish
+  # its work, although OpenCode exits 0 (DEBUGLOG issue 7).
+  local stop cutoff=false
+  stop=$(stop_reason "$RUN/$step.jsonl")
+  if ((STEP_RC == 0)) && cut_off "$RUN/$step.jsonl" "$RUN/$step.md"; then
+    cutoff=true
+    STEP_RC=98
+  fi
 
   # Models and tokens come from OpenCode's own session export, limited to messages from this
   # run. Tokens of explore subagents live in their own sessions and only show up in
@@ -384,10 +485,11 @@ run_step() {
   STEP_JSON[$step]=$(jq -c -n --arg agent "$agent" --arg session "$STEP_SESSION" --argjson rc "$STEP_RC" \
     --argjson seconds "$secs" --argjson errors "$errors" --argjson fallback "$fallback" \
     --argjson timed_out "$timed_out" --argjson tools "$tools" --argjson usage "$usage" \
-    --arg continued "$session" \
+    --arg continued "$session" --arg stop "$stop" --argjson cutoff "$cutoff" \
     '{agent: $agent, session: (if $session == "" then null else $session end),
       continued_session: ($continued != ""), exit: $rc, seconds: $seconds, timed_out: $timed_out,
-      agent_fallback: $fallback, errors: $errors, tool_calls: $tools} + $usage')
+      agent_fallback: $fallback, stop_reason: (if $stop == "" then null else $stop end),
+      cutoff: $cutoff, errors: $errors, tool_calls: $tools} + $usage')
 
   local models
   models=$(jq -r '.models | join(",")' <<<"$usage")
@@ -400,68 +502,86 @@ run_step() {
   fi
   if $fallback; then echo "             OpenCode fell back to its default agent. Check .opencode/agents/."; fi
   if $timed_out; then echo "             Timed out after $STEP_TIMEOUT."; fi
+  if $cutoff; then
+    printf '             Cut off. The last step ended with reason %s, and the final message has %s bytes.\n' \
+      "${stop:-none}" "$(wc -c <"$RUN/$step.md")"
+  fi
   return 0
 }
 
-fail_agent() {
-  RESULT="agent_failed:$1"
+# fail_run <result> <message>. Ends the run as a failed agent run, with exit 4.
+fail_run() {
+  RESULT=$1
   EXIT_CODE=4
   unmark_new_files
   write_summary
-  printf 'result       agent run failed (%s), see %s/%s.stderr and %s.jsonl\n' "$1" "$RUN" "$1" "$1"
+  printf 'result       %s\n' "$2"
   exit 4
+}
+
+fail_agent() {
+  if ((STEP_RC == 98)); then
+    fail_run "cutoff:$1" "cut off ($1), see $RUN/$1.jsonl"
+  fi
+  fail_run "agent_failed:$1" "agent run failed ($1), see $RUN/$1.stderr and $1.jsonl"
 }
 
 # ---------------------------------------------------------------- prompts
 
-{
-  printf 'Task card %s, full text below. Write the tests for this card now, following your instructions. The implementation does not exist yet.\n\n' "$CARD_REL"
-  cat "$CARD_TEXT"
-} >"$RUN/prompt-tester.md"
-
-if [[ -n $FEEDBACK ]]; then
+if ((!REVIEW_ONLY)); then
   {
-    printf 'Attempt %s of task card %s. The previous attempt was not accepted. Address every point below, run `%s` until it passes, and finish with your report.\n\n' "$ATTEMPT" "$CARD_REL" "$CHECK_CMD"
-    cat "$RUN/feedback.md"
-    if [[ -z $IMPL_SESSION ]]; then
-      printf '\n\nThe task card follows.\n\n'
-      cat "$CARD_TEXT"
-    fi
-  } >"$RUN/prompt-implementer.md"
-else
-  {
-    printf 'Task card %s, full text below. Implement it now, following your instructions.' "$CARD_REL"
-    if [[ $CHECK_CMD != "npm run check" ]]; then
-      printf ' For this card the check is `%s` instead of `npm run check`.' "$CHECK_CMD"
-    fi
-    if ((!NO_TESTER)); then
-      printf ' The tester has already written tests for this card in the test folders it names. Read them first, they define done. Never delete or weaken them. If a test contradicts the card, say so under Questions instead of changing it.'
-    fi
-    printf '\n\n'
+    printf 'Task card %s, full text below. Write the tests for this card now, following your instructions. The implementation does not exist yet.\n\n' "$CARD_REL"
     cat "$CARD_TEXT"
-  } >"$RUN/prompt-implementer.md"
+  } >"$RUN/prompt-tester.md"
+
+  if [[ -n $FEEDBACK ]]; then
+    {
+      printf 'Attempt %s of task card %s. The previous attempt was not accepted. Address every point below, run `%s` until it passes, and finish with your report.\n\n' "$ATTEMPT" "$CARD_REL" "$CHECK_CMD"
+      cat "$RUN/feedback.md"
+      if [[ -z $IMPL_SESSION ]]; then
+        printf '\n\nThe task card follows.\n\n'
+        cat "$CARD_TEXT"
+      fi
+    } >"$RUN/prompt-implementer.md"
+  else
+    {
+      printf 'Task card %s, full text below. Implement it now, following your instructions.' "$CARD_REL"
+      if [[ $CHECK_CMD != "npm run check" ]]; then
+        printf ' For this card the check is `%s` instead of `npm run check`.' "$CHECK_CMD"
+      fi
+      if ((!NO_TESTER)); then
+        printf ' The tester has already written tests for this card in the test folders it names. Read them first, they define done. Never delete or weaken them. If a test contradicts the card, say so under Questions instead of changing it.'
+      fi
+      printf '\n\n'
+      cat "$CARD_TEXT"
+    } >"$RUN/prompt-implementer.md"
+  fi
 fi
 
 # ---------------------------------------------------------------- run
 
-echo "$ID attempt $ATTEMPT, run $RUN${MODEL:+, implementer model $MODEL}"
+if ((REVIEW_ONLY)); then
+  echo "$ID review only, diff from ${DIFF_BASE:0:7}, run $RUN"
+else
+  echo "$ID attempt $ATTEMPT, run $RUN${MODEL:+, implementer model $MODEL}"
+fi
 PROCESS_BEFORE=$(process_fingerprint)
 
-if ((!NO_TESTER)); then
-  run_step tester tester "$RUN/prompt-tester.md"
-  ((STEP_RC == 0)) || fail_agent tester
-fi
+if ((!REVIEW_ONLY)); then
+  if ((!NO_TESTER)); then
+    run_step tester tester "$RUN/prompt-tester.md"
+    ((STEP_RC == 0)) || fail_agent tester
+  fi
 
-run_step implementer implementer "$RUN/prompt-implementer.md" "$IMPL_SESSION"
-((STEP_RC == 0)) || fail_agent implementer
+  run_step implementer implementer "$RUN/prompt-implementer.md" "$IMPL_SESSION"
+  ((STEP_RC == 0)) || fail_agent implementer
+  note_agent_effects
 
-if [[ $(process_fingerprint) != "$PROCESS_BEFORE" ]]; then
-  PROCESS_FILES_CHANGED=true
-  echo "             warning: tasks/, AGENTS.md, CLAUDE.md, .opencode/, tools/ or .claude/ changed during this run. See git status."
-fi
-if [[ $(git rev-parse HEAD) != "$HEAD_SHA" ]]; then
-  HEAD_MOVED=true
-  echo "             warning: HEAD moved during this run, so an agent committed. See git log. The diff is taken from ${HEAD_SHA:0:7}."
+  # Without a change the check passes on nothing and the reviewer reviews nothing.
+  if tree_matches "$HEAD_SHA"; then
+    DIFF_JSON='{"files":0,"insertions":0,"deletions":0}'
+    fail_run no_change "no change, the implementer left the diff from ${HEAD_SHA:0:7} empty"
+  fi
 fi
 
 printf '%-12s running (%s)\n' check "$(date +%H:%M:%S)"
@@ -476,12 +596,12 @@ CHECK_JSON=$(jq -c -n --argjson rc "$CHECK_RC" --argjson s "$CHECK_SECS" --argjs
 printf '%-12s %-36s exit %-3s %s\n' check "$( ((CHECK_RC == 0)) && echo passed || echo FAILED)" "$CHECK_RC" "$(fmt_secs "$CHECK_SECS")"
 if $CHECK_TIMED_OUT; then echo "             Timed out after $CHECK_TIMEOUT."; fi
 
-# The diff is taken after the check, from the commit the run started at, so it holds
-# everything the card produced, even if an agent committed.
+# The diff is taken after the check, from the commit the run started at (or from --base), so
+# it holds everything the card produced, even if an agent committed.
 mark_new_files
-git diff "$HEAD_SHA" --stat -- . ':(exclude).runs' >"$RUN/diff.stat" 2>>"$RUN/git.log"
-git diff "$HEAD_SHA" -- . ':(exclude).runs' >"$RUN/diff.patch" 2>>"$RUN/git.log"
-read -r FILES INS DEL < <(git diff "$HEAD_SHA" --numstat -- . ':(exclude).runs' 2>>"$RUN/git.log" |
+git diff "$DIFF_BASE" --stat -- . ':(exclude).runs' >"$RUN/diff.stat" 2>>"$RUN/git.log"
+git diff "$DIFF_BASE" -- . ':(exclude).runs' >"$RUN/diff.patch" 2>>"$RUN/git.log"
+read -r FILES INS DEL < <(git diff "$DIFF_BASE" --numstat -- . ':(exclude).runs' 2>>"$RUN/git.log" |
   awk '{f++; if ($1 != "-") i += $1; if ($2 != "-") d += $2} END {print f + 0, i + 0, d + 0}')
 DIFF_JSON=$(jq -c -n --argjson f "$FILES" --argjson i "$INS" --argjson d "$DEL" '{files: $f, insertions: $i, deletions: $d}')
 
@@ -489,19 +609,37 @@ if ((CHECK_RC != 0)); then
   RESULT=check_failed
   EXIT_CODE=1
 else
+  REPORT="$RUN/implementer.md" FEEDBACK_TEXT="" FEEDBACK_ATTEMPT=$ATTEMPT
+  [[ -z $FEEDBACK ]] || FEEDBACK_TEXT="$RUN/feedback.md"
+  if ((REVIEW_ONLY)); then
+    REPORT=""
+    if [[ -n $SRC_DIR ]]; then
+      [[ -s $SRC_DIR/implementer.md ]] && REPORT="$SRC_DIR/implementer.md"
+      [[ -s $SRC_DIR/feedback.md ]] && FEEDBACK_TEXT="$SRC_DIR/feedback.md"
+      FEEDBACK_ATTEMPT=$(jq -r '.attempt // 1' "$SRC_DIR/summary.json")
+    fi
+  fi
   {
-    printf 'Review the change for task card %s. The change is uncommitted in the working tree. See it with `git status` and `git diff %s`, the commit this run started from. New files are marked intent-to-add, so they show up in the diff. Ignore `.runs/`, which belongs to the run harness.' "$CARD_REL" "${HEAD_SHA:0:12}"
+    if ((REVIEW_ONLY)); then
+      printf 'Review the change for task card %s. The change is everything that differs from commit %s, whether it is committed on this branch or not. See it with `git diff %s` and `git status`. New files are marked intent-to-add, so they show up in the diff. Ignore `.runs/`, which belongs to the run harness.' "$CARD_REL" "${DIFF_BASE:0:12}" "${DIFF_BASE:0:12}"
+    else
+      printf 'Review the change for task card %s. The change is uncommitted in the working tree. See it with `git status` and `git diff %s`, the commit this run started from. New files are marked intent-to-add, so they show up in the diff. Ignore `.runs/`, which belongs to the run harness.' "$CARD_REL" "${HEAD_SHA:0:12}"
+    fi
     if [[ $CHECK_CMD != "npm run check" ]]; then
       printf ' For this card the check is `%s` instead of `npm run check`, and it has already passed.' "$CHECK_CMD"
     fi
     printf '\n\n'
-    if [[ -n $FEEDBACK ]]; then
-      printf 'This is attempt %s. Check that every point of the feedback on the previous attempt is addressed. The feedback was this.\n\n' "$ATTEMPT"
-      cat "$RUN/feedback.md"
+    if [[ -n $FEEDBACK_TEXT ]]; then
+      printf 'This is attempt %s. Check that every point of the feedback on the previous attempt is addressed. The feedback was this.\n\n' "$FEEDBACK_ATTEMPT"
+      cat "$FEEDBACK_TEXT"
       printf '\n\n'
     fi
-    printf 'The implementer reported this.\n\n'
-    cat "$RUN/implementer.md"
+    if [[ -n $REPORT ]]; then
+      printf 'The implementer reported this.\n\n'
+      cat "$REPORT"
+    else
+      printf 'There is no implementer report for this change.'
+    fi
     printf '\n\nThe task card follows.\n\n'
     cat "$CARD_TEXT"
     # Repeated from the agent file and kept last, because in T01 the reviewer wrote a
@@ -511,6 +649,7 @@ else
 
   run_step reviewer reviewer "$RUN/prompt-reviewer.md"
   ((STEP_RC == 0)) || fail_agent reviewer
+  if ((REVIEW_ONLY)); then note_agent_effects; fi
   cp "$RUN/reviewer.md" "$RUN/review.md"
 
   VERDICT=$(verdict_of "$RUN/reviewer.md")
@@ -526,5 +665,6 @@ unmark_new_files
 write_summary
 printf '%-12s %s files, +%s -%s\n' diff "$FILES" "$INS" "$DEL"
 printf 'result       %s (exit %s)\n' "$RESULT" "$EXIT_CODE"
-printf 'read         %s/summary.json, implementer.md, check.log%s, diff.patch\n' "$RUN" "$( ((CHECK_RC == 0)) && echo ', review.md')"
+printf 'read         %s/summary.json,%s check.log%s, diff.patch\n' "$RUN" \
+  "$( ((REVIEW_ONLY)) || echo ' implementer.md,')" "$( ((CHECK_RC == 0)) && echo ', review.md')"
 exit "$EXIT_CODE"

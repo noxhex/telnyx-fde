@@ -42,7 +42,7 @@ Read the status table in `tasks/README.md`, then `git log --oneline -15` and `gi
 | 1 | The check failed, no review ran | Retry with the failing output |
 | 2 | The reviewer asked for changes, or its verdict was unclear | Weigh the findings, then retry or accept |
 | 3 | Setup problem, nothing ran | Fix the setup if it is yours to fix, otherwise ask Thiago |
-| 4 | An agent run failed or timed out | Read the step's `.stderr` and `errors` in the summary. Retry once for a network blip, otherwise escalate |
+| 4 | An agent run failed, timed out or was cut off, or the implementer changed nothing. The result says which (`agent_failed:<step>`, `cutoff:<step>`, `no_change`) | Read the step's `.stderr`, `errors` and `stop_reason` in the summary. Retry once for a network blip, otherwise escalate |
 | 129, 130, 143 | Stopped by a hangup, Ctrl-C or kill | The summary is partial. Continue with `--retry` once the cause is clear |
 
 ## Accept
