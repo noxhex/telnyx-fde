@@ -17,6 +17,7 @@ Build the shared plumbing every function uses, so the request log line, the per-
 - `packages/shared/src/log.ts`, `mask.ts`, `timing.ts`, `kv-keys.ts`, and exports from `src/index.ts`.
 - `packages/shared/test/fakes/kv.ts`, `actor-storage.ts`, `clock.ts`.
 - `packages/shared/test/log.test.ts`, `mask.test.ts`, `timing.test.ts`, `kv-keys.test.ts`, `fakes.test.ts`.
+- `tsconfig.base.json` at the repo root, for `lib` and `types` only.
 
 ## Interface
 
@@ -70,10 +71,12 @@ export function assertValidKey(key: string): void;
 - `sessionIdFromCallControlId` returns the first 32 hex characters of SHA-256 over the UTF-8 call control id, using `node:crypto`.
 - `assertValidKey` throws if the key is empty, longer than 256 characters, or contains anything outside `a-z A-Z 0-9 - _ / = .`.
 - **Fakes.** The KV fake supports `get` (text and JSON), `put` with `expirationTtl` in seconds, `delete` and `list` with a prefix, honours TTL against an injected clock, and records every call so tests can assert that a route did not touch KV. The actor storage fake supports `get`, `put`, `delete`, `list`, `deleteAll`, `setAlarm`, `getAlarm` and `deleteAlarm`. The clock fake has `now()` and `advance(ms)`.
+- **Compiler settings.** `tsconfig.base.json` sets `lib` to `["ES2023"]` and `types` to `["node"]`, with no `DOM`, so no code type-checks against browser globals. `npm run check` must still pass with these settings. If the types of `@telnyx/edge-runtime` turn out to need `DOM`, keep `DOM` in `lib` and say so in your report.
 
 ## Acceptance
 
 - [ ] `npm run check` passes.
+- [ ] `tsconfig.base.json` sets `lib` to `["ES2023"]` and `types` to `["node"]`. `DOM` is only there if the report explains why the runtime's types need it.
 - [ ] Tests cover nested redaction, every masking rule including short input, parallel timing on one hop, every key builder with valid and invalid input, keys containing `:` and `+` being rejected, a stable session id for a known input, and KV fake expiry.
 
 ## Out of scope
