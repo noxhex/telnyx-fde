@@ -47,6 +47,7 @@ assistant/            assistant config and workflow builder (T11)
 scripts/              provisioning, flags, simulations
 infra/ids.json        platform ids (functions, KV namespace, assistant)
 spikes/               throwaway experiments (S3, S4)
+tools/                run harness for task cards (card.sh), not part of the solution
 docs/  tasks/
 ```
 

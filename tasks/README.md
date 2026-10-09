@@ -4,36 +4,38 @@ Each card is a self-contained prompt for a coding agent. It names the goal, the 
 
 ## The loop for one card
 
-All code is written by Telnyx-hosted models through OpenCode, with the agents defined in `.opencode/agents/`. Check once with `opencode agent list` that `implementer`, `tester` and `reviewer` appear. If they don't, rename the folder to `.opencode/agent/`, since the OpenCode docs use both names. Start a server once per work session so each run skips the startup cost.
+All code is written by Telnyx-hosted models through OpenCode, with the agents defined in `.opencode/agents/`. Claude Code orchestrates and reviews, following [CLAUDE.md](../CLAUDE.md). `tools/card.sh` runs one card from start to finish and keeps the evidence, so the loop is the same whether Claude Code drives it or you do.
 
 ```bash
-opencode serve --port 4096 &
-OC="opencode run --attach http://localhost:4096"
-
-CARD=tasks/T03-signature.md
-$OC --agent tester      --title "T03 tests"  "$(cat $CARD)"
-$OC --agent implementer --title "T03 impl"   "$(cat $CARD)"
-npm run check
-$OC --agent reviewer    --title "T03 review" "Review the current diff against $CARD"
-git add -A && git commit -m "T03: Telnyx webhook signature verifier"
+tools/card.sh tasks/T05-mock-crm.md                                               # tester, implementer, check, reviewer
+tools/card.sh tasks/T05-mock-crm.md --retry .runs/T05/feedback-1.md               # continue after feedback
+tools/card.sh tasks/T03-signature.md --no-tester --model telnyx/zai-org/GLM-5.3   # one bake-off run
+tools/card.sh tasks/S3-mcp-transport.md --no-tester --check "cd spikes/mcp-spike && npx tsc --noEmit"   # a spike with its own check
 ```
 
-- **Retry.** If `npm run check` fails or the reviewer says CHANGES, continue the implementer's session with the output, using `$OC --session <id> --agent implementer "<failing output or findings>"`. `opencode session list` shows the ids.
-- **Escalate after two failed attempts.** Bring the card, `git diff` and the error to Claude, then put the sharpened card or hint back through the implementer.
-- **Log every card** as one line in `DOGFOODING.md` (model, attempts, what broke, what helped), and any real bug in `DEBUGLOG.md`.
-- **Commit once per accepted card**, so the history reads card by card.
+- **What it runs.** The tester writes tests from the card, the implementer implements it, the check runs (`npm run check`, or the command given with `--check` for spikes), and the reviewer reads the diff when the check passed. Each agent runs headless with `opencode run --auto`, and its deny rules still hold (commit, push, ship, secrets, files outside the repo). OpenCode is told to ignore `CLAUDE.md`, so the agents work from `AGENTS.md` and their card only.
+- **What it keeps.** `.runs/<ID>/<timestamp>/` holds the prompts, each agent's final message, the raw events, OpenCode's session exports, `check.log`, `diff.patch` and `summary.json`, which records models, sessions, tokens, timings and the verdict. `.runs/<ID>/latest` points to the newest run, and `.runs/ledger.jsonl` gets one line per run. Git ignores `.runs/`, so discarding a failed attempt never loses its record. Accepting a card copies the ledger to `docs/agent-runs.jsonl`, which is committed.
+- **Exit codes.** 0 approved, 1 check failed, 2 reviewer asked for changes, 3 setup problem and nothing ran, 4 an agent run failed or timed out, and 129, 130 or 143 when the run was stopped. The summary also flags `head_moved` when an agent committed and `process_files_changed` when an agent touched the cards, the agent rules or the tooling.
+- **Accept, retry, escalate.** Accepted cards are committed one per card, with trailers that name the models. A retry continues the implementer's session with written feedback. After three failed attempts the card comes to you with a proposal. The details are in `CLAUDE.md`.
+- **Log every card** as one row per attempt in `DOGFOODING.md`, and any real bug in `DEBUGLOG.md`.
 
-Spikes that need portal or API work by hand say so in their card. Those steps are yours, and the agents only write the code parts.
+Spikes that need portal or API work by hand say so in their card. Those steps are yours, and the agents only write the code parts. S1 runs in the scratch project outside the repo, with the prompt in its card.
+
+Before the first card, add the run folder to `.gitignore` once. `tools/card.sh` refuses to run until it is there.
+
+```bash
+printf '\n# Card runs from tools/card.sh\n.runs/\n' >> .gitignore
+```
 
 ## Model bake-off on T03
 
 T03 (the signature verifier) is small, security-critical and fully testable, which makes it a fair comparison.
 
 1. For each candidate model, start from `main` on its own branch, for example `git switch -c bake/kimi-k3`.
-2. Run the implementer on the whole card with the model overridden, for example `time $OC --agent implementer --model telnyx/moonshotai/Kimi-K3 "$(cat tasks/T03-signature.md)"`. The first line of the output shows the agent and model in use, so check it names the candidate. The card asks for tests too, so no tester run is needed here.
-3. Record attempts to a passing `npm run check`, wall time and the token delta from `opencode stats --models`.
-4. Run the reviewer on each branch's diff with one fixed model, and count blocking findings.
-5. Candidates are Kimi-K3, GLM-5.3 and DeepSeek-V4-Flash-0731. Pick the implementer, tester and reviewer models from the results, update the three agent files, merge the best branch and fill in the bake-off table in `DOGFOODING.md`.
+2. Run `tools/card.sh tasks/T03-signature.md --no-tester --model <candidate>`. The card asks the implementer for tests too, so the tester does not run. `steps.implementer.models` in the summary confirms which model actually ran.
+3. Retry until the check passes, giving every candidate the same kind of feedback, the failing check output and nothing else. Attempts, wall time and tokens come from the run summaries.
+4. The reviewer keeps its own model on every branch. Count its blocking findings in `review.md`.
+5. Commit each candidate on its branch. Candidates are Kimi-K3, GLM-5.3 and DeepSeek-V4-Flash-0731. Pick the implementer, tester and reviewer models from the results, update the three agent files, merge the best branch and fill in the bake-off table in `DOGFOODING.md`.
 
 ## Suggested schedule
 

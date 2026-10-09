@@ -5,6 +5,8 @@ mode: primary
 model: telnyx/zai-org/GLM-5.3
 temperature: 0.1
 permission:
+  # Nothing outside the repository. With --auto this would otherwise be approved.
+  external_directory: deny
   edit: deny
   bash:
     "*": deny

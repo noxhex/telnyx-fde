@@ -5,6 +5,8 @@ mode: primary
 model: telnyx/zai-org/GLM-5.3
 steps: 30
 permission:
+  # Nothing outside the repository. With --auto this would otherwise be approved.
+  external_directory: deny
   edit:
     "*": deny
     "**/test/**": allow

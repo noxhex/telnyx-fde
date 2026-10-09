@@ -5,6 +5,8 @@ mode: primary
 model: telnyx/moonshotai/Kimi-K3
 steps: 60
 permission:
+  # Nothing outside the repository. With --auto this would otherwise be approved.
+  external_directory: deny
   edit: allow
   bash:
     "*": allow
