@@ -1,7 +1,7 @@
 ---
 description: Implements one task card from tasks/ until its acceptance checks pass. Never commits, pushes or ships.
 mode: primary
-# Model to be confirmed by the T03 bake-off.
+# Chosen in the T03 bake-off (ADR-018).
 model: telnyx/moonshotai/Kimi-K3
 steps: 60
 permission:

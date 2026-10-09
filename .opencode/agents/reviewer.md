@@ -1,7 +1,8 @@
 ---
 description: Read-only review of the current diff against its task card, AGENTS.md and the docs.
 mode: primary
-# Model to be confirmed by the T03 bake-off.
+# Chosen in the T03 bake-off (ADR-018). Its steps can stop at about 8,192 tokens (DEBUGLOG
+# issue 7), and tools/card.sh fails such a run as cutoff:reviewer.
 model: telnyx/zai-org/GLM-5.3
 temperature: 0.1
 permission:

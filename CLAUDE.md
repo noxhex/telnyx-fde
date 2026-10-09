@@ -42,7 +42,7 @@ Read the status table in `tasks/README.md`, then `git log --oneline -15` and `gi
 | 1 | The check failed, no review ran | Retry with the failing output |
 | 2 | The reviewer asked for changes, or its verdict was unclear | Weigh the findings, then retry or accept |
 | 3 | Setup problem, nothing ran | Fix the setup if it is yours to fix, otherwise ask Thiago |
-| 4 | An agent run failed, timed out or was cut off, or the implementer changed nothing. The result says which (`agent_failed:<step>`, `cutoff:<step>`, `no_change`) | Read the step's `.stderr`, `errors` and `stop_reason` in the summary. Retry once for a network blip, otherwise escalate |
+| 4 | An agent run failed, timed out or was cut off, or the implementer changed nothing. The result says which (`agent_failed:<step>`, `cutoff:<step>`, `no_change`) | Read the step's `.stderr`, `errors` and `stop_reason` in the summary. Rerun a cut-off review (`cutoff:reviewer`) once with `--review-only`. Otherwise retry once for a network blip, or escalate |
 | 129, 130, 143 | Stopped by a hangup, Ctrl-C or kill | The summary is partial. Continue with `--retry` once the cause is clear |
 
 ## Accept
@@ -66,6 +66,7 @@ Stop and bring it to Thiago in any of these cases.
 - Three attempts on one card have failed.
 - The card is ambiguous or conflicts with the docs, or the implementer's Questions need a decision.
 - Exit 4 twice in a row, or any error that mentions 403, 10039 or a spend limit.
+- A review was cut off twice on the same card.
 - The card needs the portal, a phone call, a ship, a secret or a push.
 - A summary shows `head_moved` or `process_files_changed`.
 - A card that creates platform resources (T01 `new-func`, T10, T11) failed midway. A timeout is an unknown outcome (ADR-015), so list what exists with `telnyx-edge list` before anyone retries.
