@@ -68,6 +68,7 @@ export function createTicket(s: CustomerAccountState, i: {
 - **`verify`** returns `locked` without comparing anything while `lockedUntil` is in the future. Otherwise it compares normalised values (trim, uppercase, spaces removed). Postcode mode compares only the postcode, and full mode compares both. Success resets failures to zero. A failure increments them, and reaching `maxFailures` sets `lockedUntil` to `nowMs + lockMs` and resets failures. `attemptsLeft` is what remains before a lock.
 - **`clearExpiredLock`** removes a lock whose time has passed.
 - **`createTicket`** returns the existing ticket with `created: false` when the dedupe key already exists. The summary is truncated to 300 characters.
+- **Broken inputs.** A `nowMs` or `lockMs` that is not a finite number, or a `maxFailures` that is not a positive whole number, makes the domain function throw a `RangeError` instead of returning a result, so nothing is verified, recorded or created with a broken clock (AGENTS.md, Time inputs fail closed).
 
 ## Actor adapter
 
@@ -76,7 +77,7 @@ The class `CustomerAccount extends StatefulActor` keeps the whole state as one J
 ## Acceptance
 
 - [ ] `npm run check` passes.
-- [ ] Domain tests cover the repeat-caller threshold at exactly three calls, a duplicate call id, calls older than 24 hours dropping out, verify success, the failure count, the lock after three failures, a locked account refusing even correct details, the lock expiring, postcode mode ignoring the account number, normalisation of `" 8630 "` and `"dv-100001"`, a duplicate ticket dedupe key, and summary truncation.
+- [ ] Domain tests cover the repeat-caller threshold at exactly three calls, a duplicate call id, calls older than 24 hours dropping out, verify success, the failure count, the lock after three failures, a locked account refusing even correct details, the lock expiring, postcode mode ignoring the account number, normalisation of `" 8630 "` and `"dv-100001"`, a duplicate ticket dedupe key, summary truncation, and a non-finite `nowMs` throwing in each domain function.
 - [ ] `telnyx-edge dev` starts `voice-tools` with the actor binding.
 - [ ] Nothing is shipped.
 
