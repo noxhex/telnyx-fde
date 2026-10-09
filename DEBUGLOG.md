@@ -140,7 +140,7 @@ $ grep 'upgraded linux ' /var/log/pacman.log | tail -1
 
 **Design impact.** None. After a kernel update, reboot before local dev work.
 
-## 7. GLM-5.3 stopped at about 8,192 output tokens, and card.sh passed the empty result on
+## 7. GLM-5.3 stopped every reply at 8,192 tokens, and card.sh passed the empty result on
 
 **Date** 9 Oct 2026 · **Area** Inference, OpenCode plugin, run harness
 
@@ -153,32 +153,28 @@ $ grep 'upgraded linux ' /var/log/pacman.log | tail -1
 reviewer, bake/kimi-k3      {"reason":"length","tokens":{"input":829,"output":0,"reasoning":8193}}
 implementer, bake/glm-5.3   {"reason":"length","tokens":{"output":0,"reasoning":8193}}
 
-# largest single step, output plus reasoning, in all runs so far
-GLM-5.3                  8193   (both length stops)
-Kimi-K3                  5416
-DeepSeek-V4-Flash-0731   2248
-
 # @telnyx/opencode 0.1.5, dist/index.js
 const output = typeof model.max_output_length === "number" ? model.max_output_length : 16384;
 config.provider[PROVIDER_ID] = { npm: "@ai-sdk/openai-compatible", name: "Telnyx", options: {...}, models };
 "chat.params": async (input, output) => { ... output.maxOutputTokens = void 0; ... }
+
+# one reply each in a scratch project, asked for every number from 1 to 2500 in words
+# (the DeepSeek runs used two wordings, because the first try without the option wrote digits)
+model                    max_tokens in the agent file   stop     output   reasoning   total
+GLM-5.3                  none                           length     7026        1166    8192
+GLM-5.3                  16384                          length    14237        2147   16384
+DeepSeek-V4-Flash-0731   none                           stop      14510           0   14510
+DeepSeek-V4-Flash-0731   16384                          stop      14250           0   14250
 ```
 
-**Cause.** The Telnyx plugin for OpenCode clears `maxOutputTokens` on every request to a Telnyx model, so OpenCode never sends `max_tokens`. The output limit of 16,384 that `opencode models telnyx --verbose` shows is never used. The inference API then applies a default of its own. Both cut-off steps stopped at 8,193 tokens and no step of any model has gone past that, which points to a default of about 8,192 for every Telnyx model. GLM-5.3 is the only one that reasons that long in a single step. Telnyx's inference docs give no default or maximum for `max_tokens`. GLM-5.3 is also missing from the plugin's list of thinking-capable models, so the plugin gives it no `enable_thinking` switch. What is not confirmed is whether the API stops at 8,192 even when a request asks for 16,384. That needs one direct API call with `TELNYX_API_KEY` in the environment, which Claude Code did not have. The call is below.
+**Cause.** The Telnyx plugin for OpenCode clears `maxOutputTokens` on every request to a Telnyx model, so OpenCode never sends `max_tokens`, and the output limit of 16,384 that `opencode models telnyx --verbose` shows is never used. Each model then gets the API's own default. For GLM-5.3 that default is 8,192 tokens per reply, reasoning included. DeepSeek-V4-Flash-0731's is higher, since it wrote 14,510 tokens in one reply without `max_tokens`. An earlier version of this entry guessed that 8,192 applied to every model, and the scratch runs disproved that. Telnyx's inference docs give no default or maximum for `max_tokens`. GLM-5.3 is also missing from the plugin's list of thinking-capable models, so the plugin gives it no `enable_thinking` switch.
 
-**Fix.** The harness is fixed, the cap is not.
+**Fix.** Both parts are fixed.
 
 1. `tools/card.sh` now fails a step whose last step ended with reason `length`, or that ended without a final message, as `cutoff:<step>` with exit 4. An implementer that leaves the diff from the start commit empty fails as `no_change`, also exit 4. The final message is now the text of the last step only, so a cut-off step shows an empty report instead of an earlier aside. `--review-only` reruns a cut-off review without another implementer attempt. Both cut-off runs above are flagged by the new checks, and none of the eight normal runs is.
-2. `.opencode/opencode.json` cannot reach the cap. The plugin's `config` hook replaces the whole `provider.telnyx` block, so a model override there is lost. A test with `OPENCODE_CONFIG` showed a dummy provider's limit taking effect, while GLM-5.3 kept the plugin's limit and empty options in the same run. Options in an agent file (`max_tokens` or `reasoning_effort`) might still reach the request, which is untested and only worth trying once the call below shows what the API does.
+2. The three agent files set `max_tokens: 16384`. `.opencode/opencode.json` cannot do it, because the plugin's `config` hook replaces the whole `provider.telnyx` block, so a model override there is lost. A test with `OPENCODE_CONFIG` showed a dummy provider's limit taking effect, while GLM-5.3 kept the plugin's limit and empty options in the same run. An option in an agent file does reach the API, because the plugin clears only `maxOutputTokens`. With it GLM-5.3 stopped at exactly 16,384 tokens instead of 8,192, and Kimi-K3 accepts it too. The implementer also keeps each write or edit to about 250 lines, so one reply stays well under the cap.
 
-```bash
-curl -sS https://api.telnyx.com/v2/ai/openai/chat/completions \
-  -H "Authorization: Bearer $TELNYX_API_KEY" -H 'Content-Type: application/json' \
-  -d '{"model":"zai-org/GLM-5.3","max_tokens":16384,"messages":[{"role":"user","content":"Write the whole numbers from 1 to 2500 in English words, one per line, with no other text."}]}' |
-  jq '{finish: .choices[0].finish_reason, usage}'
-```
-
-**Design impact.** `CLAUDE.md`. A cut-off review gets one rerun with `--review-only`, and a second cut-off on the same card goes to Thiago. GLM-5.3 stays the reviewer and does not write code (ADR-018).
+**Design impact.** `CLAUDE.md`, where a cut-off review gets one rerun with `--review-only` and a second cut-off on the same card goes to Thiago. The three agent files, which set `max_tokens`. GLM-5.3 stays the reviewer and does not write code (ADR-018).
 
 ## S1 measurements
 

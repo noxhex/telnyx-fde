@@ -183,7 +183,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 **Roles.** The measurements are in `DOGFOODING.md`.
 
 - Kimi-K3 implements, because it passed T03 on the first attempt with the strictest code and the strongest tests.
-- DeepSeek-V4-Flash-0731 writes the tests, because it was the fastest, wrote the most tests with exact reasons, comes from a different family than the implementer, and uses no reasoning tokens, so it cannot hit the output cap. Its instructions ask for boundaries and optional parameters, which its T03 tests missed.
-- GLM-5.3 reviews, because its finished reviews were the most precise. It does not write code, because its steps can stop at an output cap of about 8,192 tokens (DEBUGLOG issue 7). `tools/card.sh` fails such a step, and a cut-off review gets one rerun.
+- DeepSeek-V4-Flash-0731 writes the tests, because it was the fastest, wrote the most tests with exact reasons, comes from a different family than the implementer, and uses no reasoning tokens. Its instructions ask for boundaries and optional parameters, which its T03 tests missed.
+- GLM-5.3 reviews, because its finished reviews were the most precise. It does not write code, because as implementer in the bake-off it stopped at its output cap of 8,192 tokens before writing anything. The agent files now raise that cap to 16,384 (DEBUGLOG issue 7), and `tools/card.sh` fails a step that still reaches it, with one rerun for a cut-off review.
 
 **Consequences.** The model choice is backed by measurements, and the record of who wrote what can be checked commit by commit. The loop does not depend on Claude Code. Thiago can run `tools/card.sh` and review by hand with the same evidence, which is also the fallback if a Telnyx-only workflow is preferred. The orchestrator is a cost outside Telnyx, Thiago's subscription, and `DOGFOODING.md` names it next to the inference spend.

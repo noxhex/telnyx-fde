@@ -3,6 +3,9 @@ description: Writes tests from a task card's acceptance criteria before the impl
 mode: primary
 # Chosen in the T03 bake-off (ADR-018). Use a different model from the implementer.
 model: telnyx/deepseek-ai/DeepSeek-V4-Flash-0731
+# Sent to Telnyx as max_tokens. Without it GLM-5.3 stops every reply at 8,192 tokens,
+# reasoning included, so all three agents set it (DEBUGLOG issue 7).
+max_tokens: 16384
 steps: 30
 permission:
   # Nothing outside the repository. With --auto this would otherwise be approved.
