@@ -49,7 +49,7 @@ export function verifyTelnyxSignature(input: {
 - Check in this order and return the first failure.
   1. A missing or empty signature or timestamp gives `missing_headers`.
   2. A timestamp that is not a whole number of seconds gives `bad_timestamp`.
-  3. A timestamp more than `maxSkewSec` from `nowMs`, in either direction, gives `stale_timestamp`.
+  3. A timestamp more than `maxSkewSec` from `nowMs`, in either direction, gives `stale_timestamp`. A `nowMs` or `maxSkewSec` that is not a finite number gives `stale_timestamp` too, so a broken clock fails closed.
   4. A public key that does not decode to exactly 32 bytes gives `bad_public_key`.
   5. A signature that does not decode to exactly 64 bytes gives `bad_signature_encoding`.
   6. A signature that fails verification gives `invalid_signature`.
@@ -65,6 +65,7 @@ Generate an Ed25519 key pair inside the test with `generateKeyPairSync("ed25519"
 - [ ] `npm run check` passes.
 - [ ] One test per outcome. Valid signature, tampered body, signature from a different key, timestamp too old, timestamp too far in the future, missing signature, missing timestamp, non-numeric timestamp, public key of the wrong length, signature of the wrong length, and signature that is not base64.
 - [ ] A body containing non-ASCII characters (for example `"Café à Veurne €"`) verifies correctly.
+- [ ] A `nowMs` or `maxSkewSec` that is `NaN` or infinite gives `stale_timestamp`.
 - [ ] No key material is hard-coded in the repo.
 
 ## Out of scope
