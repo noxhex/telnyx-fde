@@ -7,6 +7,12 @@
  *
  * Platform semantics mirrored deliberately:
  *
+ * - `put` serialises its value: the stored state is always a copy, so
+ *   changing the original after `put` does not change what is stored, and
+ *   `get` and `list` hand back copies, so changing a returned value does not
+ *   either. Functions, class instances and circular references are rejected
+ *   like the real storage codec does (`Date`, `Map`, `Set`, `RegExp`,
+ *   `ArrayBuffer`, TypedArray and `BigInt` are accepted and copied).
  * - `list` returns a `Map<string, T>` in lexicographic key order, honouring
  *   `ListOptions` (`prefix`, `start` inclusive, `startAfter` exclusive,
  *   `end` exclusive, `reverse`, `limit` — default 128, capped at 1000).
@@ -50,6 +56,77 @@ export interface ActorStorageFake extends ActorStorageLike {
 const DEFAULT_LIST_LIMIT = 128;
 const MAX_LIST_LIMIT = 1000;
 
+function isPlainObject(value: object): value is Record<string, unknown> {
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Deep-copies a value the way the real storage codec serialises it, so the
+ * fake never shares an object with its caller. JSON-native values plus
+ * `Date`, `Map`, `Set`, `RegExp`, `ArrayBuffer` and TypedArray are copied
+ * (and `BigInt` passes through); functions, class instances and circular
+ * references throw, matching the runtime's documented `CodecError` cases.
+ * Shared (non-circular) references are allowed and copied per occurrence.
+ */
+function copyForStorage<T>(value: T, path: Set<object> = new Set()): T {
+  if (typeof value === "function") {
+    throw new Error("ActorStorageFake: functions cannot be stored");
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (path.has(value)) {
+    throw new Error("ActorStorageFake: circular references cannot be stored");
+  }
+  if (value instanceof Date) {
+    return new Date(value.getTime()) as T;
+  }
+  if (value instanceof RegExp) {
+    return new RegExp(value.source, value.flags) as T;
+  }
+  if (value instanceof ArrayBuffer) {
+    return value.slice(0) as T;
+  }
+  if (ArrayBuffer.isView(value)) {
+    if (value instanceof DataView) {
+      throw new Error("ActorStorageFake: class instances cannot be stored");
+    }
+    // Every concrete TypedArray implements slice() returning its own kind.
+    return (value as unknown as { slice(): T }).slice();
+  }
+  path.add(value);
+  try {
+    if (value instanceof Map) {
+      const copy = new Map<unknown, unknown>();
+      for (const [k, v] of value) {
+        copy.set(copyForStorage(k, path), copyForStorage(v, path));
+      }
+      return copy as T;
+    }
+    if (value instanceof Set) {
+      const copy = new Set<unknown>();
+      for (const item of value) {
+        copy.add(copyForStorage(item, path));
+      }
+      return copy as T;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => copyForStorage(item, path)) as T;
+    }
+    if (isPlainObject(value)) {
+      const copy: Record<string, unknown> = {};
+      for (const [name, fieldValue] of Object.entries(value)) {
+        copy[name] = copyForStorage(fieldValue, path);
+      }
+      return copy as T;
+    }
+    throw new Error("ActorStorageFake: class instances cannot be stored");
+  } finally {
+    path.delete(value);
+  }
+}
+
 class ActorStorageFakeImpl implements ActorStorageFake {
   readonly calls: ActorStorageFakeCall[] = [];
   private readonly entries = new Map<string, unknown>();
@@ -57,12 +134,16 @@ class ActorStorageFakeImpl implements ActorStorageFake {
 
   async get<T = unknown>(key: string): Promise<T | undefined> {
     this.calls.push({ method: "get", key });
-    return this.entries.get(key) as T | undefined;
+    const value = this.entries.get(key);
+    if (value === undefined) {
+      return undefined;
+    }
+    return copyForStorage(value) as T;
   }
 
   async put<T = unknown>(key: string, value: T): Promise<void> {
     this.calls.push({ method: "put", key });
-    this.entries.set(key, value);
+    this.entries.set(key, copyForStorage(value));
   }
 
   async delete(key: string): Promise<boolean> {
@@ -93,7 +174,7 @@ class ActorStorageFakeImpl implements ActorStorageFake {
     names = names.slice(0, Math.min(limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT));
     const result = new Map<string, T>();
     for (const name of names) {
-      result.set(name, this.entries.get(name) as T);
+      result.set(name, copyForStorage(this.entries.get(name)) as T);
     }
     return result;
   }

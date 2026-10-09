@@ -217,4 +217,34 @@ describe("createLogger", () => {
       expect(line.trace_id).toBe("t-1");
     });
   });
+
+  describe("values JSON cannot handle", () => {
+    it("writes a repeated object as [circular] and keeps redacting the rest", () => {
+      const { lines, sink } = makeSink();
+      const log = createLogger("svc", sink, fixedNow());
+      const shared = { id: 1 };
+      const loop: Record<string, unknown> = { name: "loop" };
+      loop.self = loop;
+
+      expect(() =>
+        log.log("info", "event", { first: shared, again: shared, loop, token: "tok" }),
+      ).not.toThrow();
+
+      const line = JSON.parse(lines[0]);
+      expect(line.first).toEqual({ id: 1 });
+      expect(line.again).toBe("[circular]");
+      expect(line.loop).toEqual({ name: "loop", self: "[circular]" });
+      expect(line.token).toBe("[redacted]");
+    });
+
+    it("writes a BigInt field as its decimal string instead of throwing", () => {
+      const { lines, sink } = makeSink();
+      const log = createLogger("svc", sink, fixedNow());
+
+      expect(() => log.log("info", "event", { amount: 123n })).not.toThrow();
+
+      const line = JSON.parse(lines[0]);
+      expect(line.amount).toBe("123");
+    });
+  });
 });

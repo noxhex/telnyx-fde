@@ -61,6 +61,11 @@ class KvFakeImpl implements KvFake {
       return null;
     }
     if (options?.type === "json") {
+      // Mirrors the real binding: a stored empty string yields null on a
+      // JSON read instead of a SyntaxError.
+      if (entry.value === "") {
+        return null;
+      }
       return JSON.parse(entry.value) as unknown;
     }
     return entry.value;
@@ -70,6 +75,11 @@ class KvFakeImpl implements KvFake {
     this.calls.push({ method: "put", key, options });
     let expiresAtMs: number | null = null;
     if (options.expirationTtl !== undefined) {
+      // Time inputs fail closed (AGENTS.md): a non-finite TTL is a bug, so
+      // reject it instead of silently pinning the key forever.
+      if (!Number.isFinite(options.expirationTtl)) {
+        throw new Error(`Invalid expirationTtl: ${options.expirationTtl}`);
+      }
       // Mirrors the platform: fractional TTLs are floored and values below
       // one second are ignored, so the key then never expires.
       const ttlSeconds = Math.floor(options.expirationTtl);

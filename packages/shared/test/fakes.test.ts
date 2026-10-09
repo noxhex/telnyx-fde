@@ -121,6 +121,23 @@ describe("KV fake", () => {
     });
   });
 
+  describe("edge cases", () => {
+    it("returns null for a JSON get of a stored empty string", async () => {
+      const { kv } = makeKv();
+      await kv.put("empty", "");
+      expect(await kv.get("empty", { type: "json" })).toBeNull();
+      // A text read of the same key still round-trips the empty string.
+      expect(await kv.get("empty")).toBe("");
+    });
+
+    it("throws for a non-finite expirationTtl", async () => {
+      const { kv } = makeKv();
+      for (const bad of [NaN, Infinity, -Infinity]) {
+        await expect(kv.put("k", "v", { expirationTtl: bad })).rejects.toThrow();
+      }
+    });
+  });
+
   describe("call recording", () => {
     it("starts with no recorded calls", async () => {
       const { kv } = makeKv();
@@ -181,6 +198,62 @@ describe("actor storage fake", () => {
     await store.deleteAll();
     expect(await store.list()).toEqual(new Map());
     expect(await store.get("a")).toBeUndefined();
+  });
+
+  describe("stored values are copies", () => {
+    it("keeps its own copy, so changing the original after put changes nothing stored", async () => {
+      const store = makeStorage();
+      const value = { items: ["a"], count: 1 };
+      await store.put("k", value);
+      value.items.push("b");
+      value.count = 99;
+      expect(await store.get("k")).toEqual({ items: ["a"], count: 1 });
+    });
+
+    it("hands back a copy from get, so changing the result changes nothing stored", async () => {
+      const store = makeStorage();
+      await store.put("k", { nested: { n: 1 } });
+      const first = await store.get<{ nested: { n: number } }>("k");
+      expect(first).toBeDefined();
+      if (first === undefined) {
+        throw new Error("expected the key to exist");
+      }
+      first.nested.n = 42;
+      expect(await store.get("k")).toEqual({ nested: { n: 1 } });
+    });
+
+    it("hands back copies from list too", async () => {
+      const store = makeStorage();
+      await store.put("k", { n: 1 });
+      const entries = await store.list<{ n: number }>();
+      const listed = entries.get("k");
+      expect(listed).toBeDefined();
+      if (listed === undefined) {
+        throw new Error("expected the key to be listed");
+      }
+      listed.n = 42;
+      expect(await store.get("k")).toEqual({ n: 1 });
+    });
+  });
+
+  describe("rejected values", () => {
+    it("throws for a function", async () => {
+      const store = makeStorage();
+      await expect(store.put("k", () => 1)).rejects.toThrow(/function/i);
+    });
+
+    it("throws for a class instance", async () => {
+      class Thing {}
+      const store = makeStorage();
+      await expect(store.put("k", new Thing())).rejects.toThrow(/class instance/i);
+    });
+
+    it("throws for a circular reference", async () => {
+      const store = makeStorage();
+      const loop: Record<string, unknown> = { name: "loop" };
+      loop.self = loop;
+      await expect(store.put("k", loop)).rejects.toThrow(/circular/i);
+    });
   });
 
   it("setAlarm, getAlarm and deleteAlarm work together", async () => {
