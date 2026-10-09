@@ -174,10 +174,16 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-018. Telnyx-hosted models write the code, Claude Code orchestrates
 
-**Status.** Accepted for the tooling split. The model roles are pending the bake-off on T03.
+**Status.** Accepted. The model roles come from the bake-off on T03, on 9 October.
 
 **Context.** Requirement 6 asks for the solution to be built with Telnyx Inference through OpenCode, and allows comparing other tools. The review asks which models we chose and why. Three facts shaped the setup. The `@telnyx/opencode` plugin runs only on OpenCode v1 (DEBUGLOG issue 2). Telnyx Inference hosts open-weight models only, so Claude is not available through it. Anthropic's terms allow a Claude subscription only in Claude's own apps and in Claude Code, so connecting the subscription to OpenCode is not an option.
 
-**Decision.** OpenCode 1.18.35 with `@telnyx/opencode` 0.1.5, and three agents with separate roles (tester, implementer, reviewer), whose models are chosen by the bake-off on T03. Claude Code, on Thiago's Claude subscription, is the orchestrator and an independent reviewer. It runs each card through `tools/card.sh`, reviews the result, writes feedback and commits accepted work, following `CLAUDE.md`. `.claude/settings.json` denies it edits to solution code, so every line of application code, tests, scripts and infrastructure configuration comes from a Telnyx-hosted model. `tools/card.sh` records every agent run, with the models and token counts from OpenCode's own session export, and each accepted card commits that record as `docs/agent-runs.jsonl`.
+**Decision.** OpenCode 1.18.35 with `@telnyx/opencode` 0.1.5, and three agents with separate roles. The implementer runs on Kimi-K3, the tester on DeepSeek-V4-Flash-0731 and the reviewer on GLM-5.3, as chosen by the bake-off on T03. Claude Code, on Thiago's Claude subscription, is the orchestrator and an independent reviewer. It runs each card through `tools/card.sh`, reviews the result, writes feedback and commits accepted work, following `CLAUDE.md`. `.claude/settings.json` denies it edits to solution code, so every line of application code, tests, scripts and infrastructure configuration comes from a Telnyx-hosted model. `tools/card.sh` records every agent run, with the models and token counts from OpenCode's own session export, and each accepted card commits that record as `docs/agent-runs.jsonl`.
+
+**Roles.** The measurements are in `DOGFOODING.md`.
+
+- Kimi-K3 implements, because it passed T03 on the first attempt with the strictest code and the strongest tests.
+- DeepSeek-V4-Flash-0731 writes the tests, because it was the fastest, wrote the most tests with exact reasons, comes from a different family than the implementer, and uses no reasoning tokens, so it cannot hit the output cap. Its instructions ask for boundaries and optional parameters, which its T03 tests missed.
+- GLM-5.3 reviews, because its finished reviews were the most precise. It does not write code, because its steps can stop at an output cap of about 8,192 tokens (DEBUGLOG issue 7). `tools/card.sh` fails such a step, and a cut-off review gets one rerun.
 
 **Consequences.** The model choice is backed by measurements, and the record of who wrote what can be checked commit by commit. The loop does not depend on Claude Code. Thiago can run `tools/card.sh` and review by hand with the same evidence, which is also the fallback if a Telnyx-only workflow is preferred. The orchestrator is a cost outside Telnyx, Thiago's subscription, and `DOGFOODING.md` names it next to the inference spend.

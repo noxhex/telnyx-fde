@@ -60,7 +60,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | S4 | Per-call token round trip | S2, S3 | todo |
 | T01 | Repo scaffold and workspace bundling | none | done |
 | T02 | Logging, timing and test fakes | T01 | todo |
-| T03 | Telnyx webhook signature verifier (bake-off) | T01 | todo |
+| T03 | Telnyx webhook signature verifier (bake-off) | T01 | done |
 | T04 | Session tokens and Telnyx encryption | T01 | todo |
 | T05 | mock-crm function | T02 | todo |
 | T06 | CustomerAccount domain and actor | T02 | todo |
