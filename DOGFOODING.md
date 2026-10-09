@@ -46,6 +46,8 @@ Same card, same starting commit (`b067ec1`), same reviewer (GLM-5.3), no tester,
 
 **After the bake-off.** Kimi-K3's branch got its missing review from a `--review-only` run, which approved with no blocking findings, and one hardening retry. The card now makes a non-finite `nowMs` or `maxSkewSec` fail closed. The retry added that guard, a test that forces an exception inside verification, and a two-fault test for each pair of neighbouring checks. Its tests then caught all 16 variants of an extended set, and the verifier gave the intended result on all 54 cases of an extended probe. The ledger also holds a review-only run on `main` at 18:26 UTC, which reviewed an uncommitted `card.sh` change by mistake while the new option was tested. It is not part of the bake-off.
 
+**GLM-5.3 as implementer, not rerun.** After the agent files lifted the output cap, GLM-5.3 could have had a fair implementer run. Thiago skipped it, because it would not change the roles and the inference credits are tight. Its row stays as recorded, cut off before writing any code.
+
 **Roles chosen.**
 
 - **Implementer, Kimi-K3.** It passed on the first attempt with the strictest code, gave the intended result on all 48 probe cases including the 14 the card leaves open, and wrote the strongest tests. It also did T01.
