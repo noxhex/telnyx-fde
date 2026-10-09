@@ -22,8 +22,9 @@ export type SignatureCheck =
 /**
  * Verifies a Telnyx webhook signature (Ed25519 over `{timestamp}|{rawBody}`)
  * without throwing, logging or touching the clock. Returns the first failed
- * check, in the order: headers present, timestamp shape, timestamp fresh,
- * public key length, signature length, signature valid.
+ * check, in the order: headers present, timestamp shape, timestamp fresh
+ * (a non-finite `nowMs` or `maxSkewSec` counts as stale), public key length,
+ * signature length, signature valid.
  */
 export function verifyTelnyxSignature(input: {
   rawBody: string;
@@ -34,7 +35,7 @@ export function verifyTelnyxSignature(input: {
   maxSkewSec?: number;
 }): SignatureCheck {
   const { rawBody, signature, timestamp, publicKey, nowMs } = input;
-  const maxSkewMs = (input.maxSkewSec ?? DEFAULT_MAX_SKEW_SEC) * 1000;
+  const maxSkewSec = input.maxSkewSec ?? DEFAULT_MAX_SKEW_SEC;
 
   if (!signature || !timestamp) {
     return { ok: false, reason: "missing_headers" };
@@ -45,7 +46,13 @@ export function verifyTelnyxSignature(input: {
   }
   const timestampMs = Number(timestamp) * 1000;
 
-  if (Math.abs(nowMs - timestampMs) > maxSkewMs) {
+  // A broken clock fails closed: non-finite clock inputs count as stale,
+  // because NaN or Infinity would otherwise make the skew comparison false.
+  if (
+    !Number.isFinite(nowMs) ||
+    !Number.isFinite(maxSkewSec) ||
+    Math.abs(nowMs - timestampMs) > maxSkewSec * 1000
+  ) {
     return { ok: false, reason: "stale_timestamp" };
   }
 

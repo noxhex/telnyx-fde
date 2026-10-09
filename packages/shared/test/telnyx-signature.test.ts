@@ -1,9 +1,16 @@
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, sign, verify } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { verifyTelnyxSignature } from "../src/index.js";
+
+// Wrap verify in a mock that delegates to the real implementation, so one
+// test below can make it throw. Every other test uses the real verify.
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, verify: vi.fn(actual.verify) };
+});
 
 const NOW_MS = 1_760_000_000_000;
 const NOW_SEC = String(Math.floor(NOW_MS / 1000));
@@ -162,5 +169,86 @@ describe("verifyTelnyxSignature", () => {
       }),
     );
     expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects a non-finite nowMs as a stale timestamp", () => {
+    const key = generateTestKey();
+    for (const nowMs of [NaN, Infinity, -Infinity]) {
+      expect(verifyTelnyxSignature(signedInput(key, { nowMs }))).toEqual({
+        ok: false,
+        reason: "stale_timestamp",
+      });
+    }
+  });
+
+  it("rejects a non-finite maxSkewSec as a stale timestamp", () => {
+    const key = generateTestKey();
+    for (const maxSkewSec of [NaN, Infinity]) {
+      expect(verifyTelnyxSignature(signedInput(key, { maxSkewSec }))).toEqual({
+        ok: false,
+        reason: "stale_timestamp",
+      });
+    }
+  });
+
+  it("returns invalid_signature when verification throws unexpectedly", () => {
+    const key = generateTestKey();
+    vi.mocked(verify).mockImplementationOnce(() => {
+      throw new Error("unexpected crypto failure");
+    });
+    expect(verifyTelnyxSignature(signedInput(key))).toEqual({
+      ok: false,
+      reason: "invalid_signature",
+    });
+  });
+
+  describe("check order", () => {
+    it("reports missing headers before a malformed timestamp", () => {
+      const key = generateTestKey();
+      const result = verifyTelnyxSignature(
+        signedInput(key, { signature: null, timestamp: "not-a-timestamp" }),
+      );
+      expect(result).toEqual({ ok: false, reason: "missing_headers" });
+    });
+
+    it("reports a malformed timestamp before staleness", () => {
+      const key = generateTestKey();
+      const result = verifyTelnyxSignature(
+        signedInput(key, { timestamp: "not-a-timestamp", nowMs: NaN }),
+      );
+      expect(result).toEqual({ ok: false, reason: "bad_timestamp" });
+    });
+
+    it("reports staleness before a bad public key", () => {
+      const key = generateTestKey();
+      const oldSec = String(Math.floor(NOW_MS / 1000) - 301);
+      const result = verifyTelnyxSignature(
+        signedInput(key, {
+          timestamp: oldSec,
+          signature: signPayload(key.privateKey, oldSec, BODY),
+          publicKey: Buffer.alloc(16, 7).toString("base64"),
+        }),
+      );
+      expect(result).toEqual({ ok: false, reason: "stale_timestamp" });
+    });
+
+    it("reports a bad public key before bad signature encoding", () => {
+      const key = generateTestKey();
+      const result = verifyTelnyxSignature(
+        signedInput(key, {
+          publicKey: Buffer.alloc(16, 7).toString("base64"),
+          signature: Buffer.alloc(63, 1).toString("base64"),
+        }),
+      );
+      expect(result).toEqual({ ok: false, reason: "bad_public_key" });
+    });
+
+    it("reports bad signature encoding before verification", () => {
+      const key = generateTestKey();
+      const result = verifyTelnyxSignature(
+        signedInput(key, { signature: Buffer.alloc(63, 1).toString("base64") }),
+      );
+      expect(result).toEqual({ ok: false, reason: "bad_signature_encoding" });
+    });
   });
 });
