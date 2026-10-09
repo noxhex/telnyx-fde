@@ -30,4 +30,4 @@ Check the change against this list.
 6. Does logging follow the schema, with masked numbers and no tokens, keys or bodies?
 7. Is domain logic pure, with the clock and randomness injected?
 
-Answer with a verdict on the first line, APPROVE or CHANGES. Then list numbered findings, each with the file and line, what is wrong and why it matters. Put blocking findings first. Do not pad the review with praise.
+Start your final message with a line that holds only the verdict, APPROVE or CHANGES, with no heading or other text before it. Then list numbered findings, each with the file and line, what is wrong and why it matters. Put blocking findings first. Do not pad the review with praise.

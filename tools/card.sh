@@ -6,6 +6,8 @@
 #   tools/card.sh tasks/T05-mock-crm.md --retry .runs/T05/feedback-1.md
 #   tools/card.sh tasks/S3-mcp-transport.md --no-tester --check "cd spikes/mcp-spike && npx tsc --noEmit"
 #
+# --verdict <review file> prints APPROVE, CHANGES or UNCLEAR for that file and runs nothing.
+#
 # Steps. The tester writes tests from the card (skipped with --no-tester and on retries).
 # The implementer implements the card. On a retry it continues its session from the last
 # run of this card on this branch, with the feedback. Then the check, `npm run check` unless
@@ -47,6 +49,24 @@ usage() {
   exit "$1"
 }
 
+# verdict_of <review file>. Prints APPROVE, CHANGES or UNCLEAR. The first line, among the
+# first ten non-empty ones, that names a verdict decides, so a heading or a short preamble
+# before it does no harm. A line that names both is UNCLEAR. Only the upper-case words count.
+verdict_of() {
+  local v
+  v=$(awk '
+    NF {
+      n++
+      a = ($0 ~ /(^|[^A-Za-z])APPROVED?([^A-Za-z]|$)/)
+      c = ($0 ~ /(^|[^A-Za-z])CHANGES([^A-Za-z]|$)/)
+      if (a && c) { print "UNCLEAR"; exit }
+      if (a) { print "APPROVE"; exit }
+      if (c) { print "CHANGES"; exit }
+      if (n >= 10) { exit }
+    }' "$1" 2>/dev/null)
+  echo "${v:-UNCLEAR}"
+}
+
 # ---------------------------------------------------------------- arguments
 
 CARD="" NO_TESTER=0 MODEL="" FEEDBACK="" CHECK_CMD=""
@@ -67,6 +87,12 @@ while (($#)); do
       (($# >= 2)) || die 3 "--check needs a command"
       CHECK_CMD=$2
       shift
+      ;;
+    --verdict)
+      (($# >= 2)) || die 3 "--verdict needs a review file"
+      [[ -f $2 ]] || die 3 "review file not found: $2"
+      verdict_of "$2"
+      exit 0
       ;;
     -h | --help) usage 0 ;;
     -*) die 3 "unknown option $1" ;;
@@ -484,15 +510,12 @@ else
   ((STEP_RC == 0)) || fail_agent reviewer
   cp "$RUN/reviewer.md" "$RUN/review.md"
 
-  # The verdict must be on the first non-empty line, as the reviewer is instructed.
-  FIRST=$(grep -m 1 -v '^[[:space:]]*$' "$RUN/reviewer.md" || true)
-  if grep -qwE 'APPROVED?' <<<"$FIRST" && ! grep -qw CHANGES <<<"$FIRST"; then
-    VERDICT=APPROVE RESULT=approved EXIT_CODE=0
-  elif grep -qw CHANGES <<<"$FIRST" && ! grep -qwE 'APPROVED?' <<<"$FIRST"; then
-    VERDICT=CHANGES RESULT=changes_requested EXIT_CODE=2
-  else
-    VERDICT=UNCLEAR RESULT=verdict_unclear EXIT_CODE=2
-  fi
+  VERDICT=$(verdict_of "$RUN/reviewer.md")
+  case $VERDICT in
+    APPROVE) RESULT=approved EXIT_CODE=0 ;;
+    CHANGES) RESULT=changes_requested EXIT_CODE=2 ;;
+    *) VERDICT=UNCLEAR RESULT=verdict_unclear EXIT_CODE=2 ;;
+  esac
   printf '%-12s %s\n' verdict "$VERDICT"
 fi
 
