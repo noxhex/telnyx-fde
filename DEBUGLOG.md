@@ -140,6 +140,46 @@ $ grep 'upgraded linux ' /var/log/pacman.log | tail -1
 
 **Design impact.** None. After a kernel update, reboot before local dev work.
 
+## 7. GLM-5.3 stopped at about 8,192 output tokens, and card.sh passed the empty result on
+
+**Date** 9 Oct 2026 · **Area** Inference, OpenCode plugin, run harness
+
+**Symptom.** In the T03 bake-off GLM-5.3 stopped twice in the middle of its work, once as the reviewer on Kimi-K3's branch and once as the implementer on its own branch. Both times its last step was all reasoning and no text. OpenCode still exited 0, so `tools/card.sh` carried on. The empty review became an UNCLEAR verdict (exit 2). The empty change went through `npm run check`, which passed because there was nothing new to check, and the reviewer then asked for changes to files that did not exist. The implementer's report was an aside from an earlier step ("Now let me look at the existing `packages/shared` structure"), because card.sh took the last text it could find.
+
+**Evidence.**
+
+```text
+# last step_finish of each cut-off run
+reviewer, bake/kimi-k3      {"reason":"length","tokens":{"input":829,"output":0,"reasoning":8193}}
+implementer, bake/glm-5.3   {"reason":"length","tokens":{"output":0,"reasoning":8193}}
+
+# largest single step, output plus reasoning, in all runs so far
+GLM-5.3                  8193   (both length stops)
+Kimi-K3                  5416
+DeepSeek-V4-Flash-0731   2248
+
+# @telnyx/opencode 0.1.5, dist/index.js
+const output = typeof model.max_output_length === "number" ? model.max_output_length : 16384;
+config.provider[PROVIDER_ID] = { npm: "@ai-sdk/openai-compatible", name: "Telnyx", options: {...}, models };
+"chat.params": async (input, output) => { ... output.maxOutputTokens = void 0; ... }
+```
+
+**Cause.** The Telnyx plugin for OpenCode clears `maxOutputTokens` on every request to a Telnyx model, so OpenCode never sends `max_tokens`. The output limit of 16,384 that `opencode models telnyx --verbose` shows is never used. The inference API then applies a default of its own. Both cut-off steps stopped at 8,193 tokens and no step of any model has gone past that, which points to a default of about 8,192 for every Telnyx model. GLM-5.3 is the only one that reasons that long in a single step. Telnyx's inference docs give no default or maximum for `max_tokens`. GLM-5.3 is also missing from the plugin's list of thinking-capable models, so the plugin gives it no `enable_thinking` switch. What is not confirmed is whether the API stops at 8,192 even when a request asks for 16,384. That needs one direct API call with `TELNYX_API_KEY` in the environment, which Claude Code did not have. The call is below.
+
+**Fix.** The harness is fixed, the cap is not.
+
+1. `tools/card.sh` now fails a step whose last step ended with reason `length`, or that ended without a final message, as `cutoff:<step>` with exit 4. An implementer that leaves the diff from the start commit empty fails as `no_change`, also exit 4. The final message is now the text of the last step only, so a cut-off step shows an empty report instead of an earlier aside. `--review-only` reruns a cut-off review without another implementer attempt. Both cut-off runs above are flagged by the new checks, and none of the eight normal runs is.
+2. `.opencode/opencode.json` cannot reach the cap. The plugin's `config` hook replaces the whole `provider.telnyx` block, so a model override there is lost. A test with `OPENCODE_CONFIG` showed a dummy provider's limit taking effect, while GLM-5.3 kept the plugin's limit and empty options in the same run. Options in an agent file (`max_tokens` or `reasoning_effort`) might still reach the request, which is untested and only worth trying once the call below shows what the API does.
+
+```bash
+curl -sS https://api.telnyx.com/v2/ai/openai/chat/completions \
+  -H "Authorization: Bearer $TELNYX_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"zai-org/GLM-5.3","max_tokens":16384,"messages":[{"role":"user","content":"Write the whole numbers from 1 to 2500 in English words, one per line, with no other text."}]}' |
+  jq '{finish: .choices[0].finish_reason, usage}'
+```
+
+**Design impact.** `CLAUDE.md`. A cut-off review gets one rerun with `--review-only`, and a second cut-off on the same card goes to Thiago. GLM-5.3 stays the reviewer and does not write code (ADR-018).
+
 ## S1 measurements
 
 Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings and cold starts.
