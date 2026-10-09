@@ -1,3 +1,8 @@
+// Re-export the actor class from the entry point so it is bundled and
+// shipped with the function; the exported name must equal the [[actors]]
+// type in telnyx.toml.
+export { CustomerAccount } from "./actors/customer-account.js";
+
 import type { Env } from "@telnyx/edge-runtime";
 
 import { SHARED_VERSION } from "@duinvezel/shared";

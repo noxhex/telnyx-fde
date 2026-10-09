@@ -63,7 +63,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T03 | Telnyx webhook signature verifier (bake-off) | T01 | done |
 | T04 | Session tokens and Telnyx encryption | T01 | done |
 | T05 | mock-crm function | T02 | todo |
-| T06 | CustomerAccount domain and actor | T02 | todo |
+| T06 | CustomerAccount domain and actor | T02 | done |
 | T07 | AreaIncident domain and actor | T02 | todo |
 | T08 | voice-context function | T03, T04, T05, T06, S1 | todo |
 | T09 | voice-tools MCP server | T04, T06, T07, S3 | todo |
