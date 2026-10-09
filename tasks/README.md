@@ -61,7 +61,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T01 | Repo scaffold and workspace bundling | none | done |
 | T02 | Logging, timing and test fakes | T01 | done |
 | T03 | Telnyx webhook signature verifier (bake-off) | T01 | done |
-| T04 | Session tokens and Telnyx encryption | T01 | todo |
+| T04 | Session tokens and Telnyx encryption | T01 | done |
 | T05 | mock-crm function | T02 | todo |
 | T06 | CustomerAccount domain and actor | T02 | todo |
 | T07 | AreaIncident domain and actor | T02 | todo |

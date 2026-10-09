@@ -2,6 +2,9 @@ export { assertValidKey, kvKeys, sessionIdFromCallControlId } from "./kv-keys.js
 export { createLogger } from "./log.js";
 export type { Fields, Level, Logger } from "./log.js";
 export { maskAccount, maskPhone } from "./mask.js";
+export { mintSessionToken, verifySessionToken } from "./session-token.js";
+export type { SessionClaims, TokenCheck } from "./session-token.js";
+export { decryptForTests, encryptForTelnyx, parseKey } from "./telnyx-encrypt.js";
 export { verifyTelnyxSignature } from "./telnyx-signature.js";
 export type { SignatureCheck } from "./telnyx-signature.js";
 export { startTimings } from "./timing.js";
