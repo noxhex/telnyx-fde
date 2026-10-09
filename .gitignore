@@ -1,3 +1,6 @@
 node_modules/
 .env*
 *.log
+
+# Card runs from tools/card.sh
+.runs/
