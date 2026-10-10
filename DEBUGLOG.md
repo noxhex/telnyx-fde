@@ -300,6 +300,28 @@ actorUrlRoot: `http://${host}:${port}`,      // DAPR_HOST and DAPR_HTTP_PORT, de
 
 **Design impact.** ADR-019 moves sessions from KV to a `Session` actor (card T18) and puts memory caches in front of the hot KV reads, 10 seconds for flags and area statuses and 60 seconds for CRM results. The call setup webhook timeout is 4,000 ms, and `docs/ARCHITECTURE.md` (Call setup latency budget) has the new timeouts and expected times. T08 and T09 follow them, and T10 times the first request after each ship and the call from voice-context to mock-crm.
 
+## 12. `telnyx-edge dev` refuses a function that only references shared actors
+
+**Date** 10 Oct 2026 · **Area** Edge Compute CLI 0.5.10, `telnyx-edge dev`
+
+**Symptom.** The T08 dev check could not run. `voice-context` declares the `CustomerAccount` and `Session` types under its own bindings and ships no class, as the shared-actors doc describes, and the dev stack refuses to start.
+
+**Evidence.**
+
+```text
+$ cd functions/voice-context && telnyx-edge dev --generate-only
+Error: ❌ actor class(es) CustomerAccount, Session are not exported by "src/index.ts"
+💡 The local actor runtime resolves actor classes by named export. Re-export each actor class from your entry point, e.g. `export { CustomerAccount } from "./CustomerAccount";`.
+```
+
+The shared-actors doc (https://developers.telnyx.com/docs/edge-compute/stateful-actors/shared-actors.md) says "The reference function declares the same `type` under a different `binding` and ships **no** actor class". Its walkthrough ships the reference with `telnyx-edge ship` and never runs it under dev.
+
+**Cause.** The dev command requires every `[[actors]]` type to be exported from `main`. That fits an owner but not a reference function, and even `--generate-only` refuses, so the command offers no way around it.
+
+**Fix.** None in our code. Re-exporting the classes would make voice-context a second owner, which the doc rules out.
+
+**Design impact.** The three keyless checks the T08 card wanted under dev (`/healthz` 200, an unknown path 404, an unsigned `POST /dv` 403) are covered by `test/routing.test.ts`, which drives the real fetch handler with a dev-like env, and by `scripts/smoke.sh` on the deployed function in T10. T10 ships voice-tools, the owner, before voice-context, because the doc says a reference type resolves only against an owner already on the account.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.

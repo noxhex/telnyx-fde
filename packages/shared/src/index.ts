@@ -1,4 +1,8 @@
+export { AREAS, areaNameForPostcode } from "./areas.js";
+export type { Area } from "./areas.js";
 export { assertValidKey, kvKeys, sessionIdFromCallControlId } from "./kv-keys.js";
+export { createMemoryCache } from "./memory-cache.js";
+export type { MemoryCache } from "./memory-cache.js";
 export { createLogger } from "./log.js";
 export type { Fields, Level, Logger } from "./log.js";
 export { maskAccount, maskPhone } from "./mask.js";

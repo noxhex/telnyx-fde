@@ -2,6 +2,41 @@ name = "voice-context"
 main = "src/index.ts"
 compatibility_date = "2026-05-01"
 
+# Shared actors: the classes ship with voice-tools (ADR-003), this function
+# ships no class and declares the same types under its own bindings.
+[[actors]]
+binding = "CUSTOMER_ACCOUNT"
+type = "CustomerAccount"
+
+[[actors]]
+binding = "SESSION"
+type = "Session"
+
+# The duinvezel namespace (infra/ids.json), created by hand; flags, the area
+# status read model, the CRM cache and the canary probe live here.
+[storage.kv.KV]
+id = "504d09fa-a57f-4d70-b134-6b97ea537ae1"
+
+[[secrets]]
+binding = "TELNYX_PUBLIC_KEY"
+name = "TELNYX_PUBLIC_KEY"
+
+[[secrets]]
+binding = "MCP_TOKEN_KEY"
+name = "MCP_TOKEN_KEY"
+
+[[secrets]]
+binding = "MCP_ENC_KEY"
+name = "MCP_ENC_KEY"
+
+[[secrets]]
+binding = "INTERNAL_KEY"
+name = "INTERNAL_KEY"
+
+# mock-crm's invoke URL (infra/ids.json).
+[env_vars]
+CRM_URL = "https://mock-crm-26584f2f-d.telnyxcompute.com"
+
 [edge_compute]
 func_id = "00d2df1a-d987-43f8-a35d-f08c80d2c534"
 func_name = "voice-context"
