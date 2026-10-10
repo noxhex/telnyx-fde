@@ -1,5 +1,5 @@
 {
-  "kvNamespaceId": null,
+  "kvNamespaceId": "504d09fa-a57f-4d70-b134-6b97ea537ae1",
   "functions": {
     "voice-context": {
       "name": "voice-context",
