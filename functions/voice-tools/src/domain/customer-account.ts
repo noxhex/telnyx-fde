@@ -70,7 +70,7 @@ export interface CreateTicketResult {
   window: string;
 }
 
-/** A call drops out of the sliding window once it is exactly 24 h old. */
+/** A call drops out of the sliding window once it is strictly older than 24 h, so a call exactly 24 h old still counts. */
 export const CALL_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** The caller counts as a repeat caller from their third call in 24 h. */
 export const REPEAT_CALLER_THRESHOLD = 3;
@@ -105,17 +105,18 @@ function normalise(value: string): string {
 }
 
 /**
- * Record one call in the 24-hour window. Calls older than the window drop
- * out; a call id that is already in the window is ignored, so Telnyx
- * webhook retries never count twice. `repeatCaller` fires from the third
- * call in the window, this one included.
+ * Record one call in the 24-hour window. Calls strictly older than the
+ * window drop out; a call exactly 24 hours old still counts. A call id
+ * that is already in the window is ignored, so Telnyx webhook retries
+ * never count twice. `repeatCaller` fires from the third call in the
+ * window, this one included.
  */
 export function recordCall(
   s: CustomerAccountState,
   i: RecordCallInput,
 ): { state: CustomerAccountState; result: RecordCallResult } {
   requireFiniteMs("recordCall", "nowMs", i.nowMs);
-  const fresh = s.calls.filter((c) => i.nowMs - c.at < CALL_WINDOW_MS);
+  const fresh = s.calls.filter((c) => i.nowMs - c.at <= CALL_WINDOW_MS);
   const seen = fresh.some((c) => c.id === i.callId);
   const calls = seen ? fresh : [...fresh, { id: i.callId, at: i.nowMs }];
   const callCount24h = calls.length;

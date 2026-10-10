@@ -1,15 +1,25 @@
 /**
  * CustomerAccount actor — thin adapter over `../domain/customer-account.ts`
- * (ADR-006). One instance per CRM account. The whole state lives as a
- * single JSON document under the storage key `state`. Every method loads
- * it, runs the pure domain function, saves the result and returns; all
- * rules live in the domain module.
+ * (ADR-006). One instance per CRM account; the account number is the
+ * instance name (`ctx.id`). The whole state lives as a single JSON document
+ * under the storage key `state`. Every method loads it, runs the pure
+ * domain function, saves the result and returns; all rules live in the
+ * domain module.
+ *
+ * Each state-changing method takes an optional `traceId` (the call control
+ * id threaded through T08/T09) and writes one log line at the end
+ * (docs/ARCHITECTURE.md, Observability): event `"actor"`, the method, the
+ * trace id, the masked account, the outcome and the per-hop latency. A
+ * method that throws logs outcome `"error"` and rethrows.
  */
 
 import { randomInt } from "node:crypto";
 
 import { StatefulActor } from "@telnyx/edge-runtime";
 import type { AlarmInfo } from "@telnyx/edge-runtime";
+
+import { createLogger, maskAccount, startTimings } from "@duinvezel/shared";
+import type { Level, Timings } from "@duinvezel/shared";
 
 import {
   clearExpiredLock,
@@ -31,38 +41,63 @@ import type {
 const STATE_KEY = "state";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BRUSSELS_TZ = "Europe/Brussels";
+const ACTOR_NAME = "CustomerAccount";
+
+const logger = createLogger("voice-tools");
 
 /** The createTicket input callers send; the actor generates id and window. */
 export type NewTicketInput = Omit<CreateTicketInput, "ticketId" | "window">;
 
 export class CustomerAccount extends StatefulActor {
-  async recordCall(input: RecordCallInput): Promise<RecordCallResult> {
-    const s = await this._load();
-    const { state, result } = recordCall(s, input);
-    await this._save(state);
-    return result;
-  }
-
-  async verify(input: VerifyInput): Promise<VerifyResult> {
-    const s = await this._load();
-    const { state, result } = verify(s, input);
-    await this._save(state);
-    // While a lock is active there is an alarm on it, so the lock lifts
-    // even if the caller never rings back. Re-arming an alarm that is
-    // already scheduled to the same instant is a no-op on the platform.
-    if (result.lockedUntil !== null) {
-      await this.ctx.storage.setAlarm(result.lockedUntil);
+  async recordCall(input: RecordCallInput, traceId?: string): Promise<RecordCallResult> {
+    const timings = startTimings();
+    try {
+      const s = await timings.time("actor", () => this._load());
+      const { state, result } = recordCall(s, input);
+      await timings.time("actor", () => this._save(state));
+      this._log("info", "recordCall", traceId, "recorded", timings);
+      return result;
+    } catch (error) {
+      this._log("error", "recordCall", traceId, "error", timings);
+      throw error;
     }
-    return result;
   }
 
-  async createTicket(input: NewTicketInput): Promise<CreateTicketResult> {
-    const s = await this._load();
-    const ticketId = newTicketId();
-    const window = nextWorkingDayWindow(input.nowMs);
-    const { state, result } = createTicket(s, { ...input, ticketId, window });
-    await this._save(state);
-    return result;
+  async verify(input: VerifyInput, traceId?: string): Promise<VerifyResult> {
+    const timings = startTimings();
+    try {
+      const s = await timings.time("actor", () => this._load());
+      const { state, result } = verify(s, input);
+      await timings.time("actor", () => this._save(state));
+      // While a lock is active there is an alarm on it, so the lock lifts
+      // even if the caller never rings back. Re-arming an alarm that is
+      // already scheduled to the same instant is a no-op on the platform.
+      const lockedUntil = result.lockedUntil;
+      if (lockedUntil !== null) {
+        await timings.time("actor", () => this.ctx.storage.setAlarm(lockedUntil));
+      }
+      this._log("info", "verify", traceId, result.outcome, timings);
+      return result;
+    } catch (error) {
+      this._log("error", "verify", traceId, "error", timings);
+      throw error;
+    }
+  }
+
+  async createTicket(input: NewTicketInput, traceId?: string): Promise<CreateTicketResult> {
+    const timings = startTimings();
+    try {
+      const s = await timings.time("actor", () => this._load());
+      const ticketId = newTicketId();
+      const window = nextWorkingDayWindow(input.nowMs);
+      const { state, result } = createTicket(s, { ...input, ticketId, window });
+      await timings.time("actor", () => this._save(state));
+      this._log("info", "createTicket", traceId, result.created ? "created" : "existing", timings);
+      return result;
+    } catch (error) {
+      this._log("error", "createTicket", traceId, "error", timings);
+      throw error;
+    }
   }
 
   /** Debug view of the stored state; the storage codec hands back a copy. */
@@ -90,6 +125,31 @@ export class CustomerAccount extends StatefulActor {
 
   private async _save(s: CustomerAccountState): Promise<void> {
     await this.ctx.storage.put(STATE_KEY, s);
+  }
+
+  /** One line per call; the account is the masked instance name, never raw. */
+  private _log(
+    level: Level,
+    method: string,
+    traceId: string | undefined,
+    outcome: string,
+    timings: Timings,
+  ): void {
+    logger.log(level, "actor", {
+      actor: ACTOR_NAME,
+      method,
+      trace_id: traceId ?? null,
+      account: maskAccount(this._instanceName()),
+      outcome,
+      latency_ms: timings.snapshot(),
+    });
+  }
+
+  private _instanceName(): string {
+    // The runtime sets ctx.id from idFromName(name). A bare-bones test
+    // double may carry no id; a missing name must never break a log line.
+    const id: unknown = this.ctx.id;
+    return typeof id === "string" ? id : "";
   }
 }
 

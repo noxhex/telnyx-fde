@@ -57,4 +57,5 @@ Small open points from accepted cards, done together near the end as follow-up r
 
 - **T02, logger.** Only a real cycle becomes `"[circular]"`, so an object that appears twice in one line is written in full both times. A clock that returns a non-finite value does not make `log()` throw.
 - **T05, delay cap.** A `crm_delay_ms` above 10,000 clamps to 10,000 instead of counting as invalid, so a typo during the demo still gives a slow CRM and every route stays far below the 30-second limit. Tests at 10,000 and 10,001. The T05 card gets the same line in that pass.
+- **T06, test gaps.** The error path of `recordCall` and the `locked` outcome of `verify` have no logging test, the older actor tests print log lines to stdout, and `customer-account.test.ts` lacks its final newline.
 - **T07, latency on actor lines.** The `actor`, `publish` and `publish_retry` lines log `latency_ms` as a number. They should carry the same object as the request lines, `total` and whichever hops apply.

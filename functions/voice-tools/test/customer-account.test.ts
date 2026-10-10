@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CustomerAccount } from "../src/actors/customer-account.js";
 import {
@@ -75,14 +75,15 @@ describe("recordCall", () => {
     expect(state.calls).toHaveLength(2);
   });
 
-  it("drops a call exactly 24 hours old", () => {
+  it("keeps a call exactly 24 hours old", () => {
     let s = initialState();
     s = recordCall(s, { callId: "old", nowMs: 0 }).state;
-    // Exactly 24 hours later the old call drops out of the window.
+    // Exactly 24 hours later the old call is still inside the window: the
+    // card drops calls strictly older than 24 hours.
     const { state, result } = recordCall(s, { callId: "new", nowMs: DAY_MS });
-    expect(result.callCount24h).toBe(1);
+    expect(result.callCount24h).toBe(2);
     expect(result.repeatCaller).toBe(false);
-    expect(state.calls.map((c) => c.id)).toEqual(["new"]);
+    expect(state.calls.map((c) => c.id)).toEqual(["old", "new"]);
   });
 
   it("keeps a call one millisecond short of 24 hours", () => {
@@ -91,6 +92,16 @@ describe("recordCall", () => {
     const { state, result } = recordCall(s, { callId: "new", nowMs: DAY_MS - 1 });
     expect(result.callCount24h).toBe(2);
     expect(state.calls).toHaveLength(2);
+  });
+
+  it("drops a call one millisecond past 24 hours", () => {
+    let s = initialState();
+    s = recordCall(s, { callId: "old", nowMs: 0 }).state;
+    // One millisecond beyond the window the old call is strictly older and drops out.
+    const { state, result } = recordCall(s, { callId: "new", nowMs: DAY_MS + 1 });
+    expect(result.callCount24h).toBe(1);
+    expect(result.repeatCaller).toBe(false);
+    expect(state.calls.map((c) => c.id)).toEqual(["new"]);
   });
 
   it("counts only fresh calls for the repeat-caller decision", () => {
@@ -552,13 +563,6 @@ describe("broken inputs throw RangeError", () => {
 // ---------- actor adapter ----------
 
 describe("CustomerAccount actor adapter", () => {
-  // A helper that seeds fresh storage with an initial state and returns an
-  // actor wired to that storage, plus the storage itself for assertions.
-  function makeActor() {
-    const storage = createActorStorageFake();
-    return { storage, actor: new CustomerAccount({ storage } as never, {} as never) };
-  }
-
   async function seed(state: CustomerAccountState) {
     const storage = createActorStorageFake();
     await storage.put("state", state);
@@ -665,6 +669,32 @@ describe("CustomerAccount actor adapter", () => {
     expect(stored?.tickets[0].dedupeKey).toBe("call-123");
   });
 
+  it("createTicket pins the exact window string for a fixed nowMs", async () => {
+    const storage = await seed(initialState());
+    const actor = new CustomerAccount({ storage } as never, {} as never);
+    // Wednesday 2026-10-07 10:00 in Brussels (CEST, UTC+2): the next working day is Thursday.
+    const result = await actor.createTicket({
+      dedupeKey: "call-9",
+      category: "repair_visit",
+      summary: "Fiber down",
+      nowMs: Date.UTC(2026, 9, 7, 8, 0, 0),
+    });
+    expect(result.window).toBe("2026-10-08 08:00-12:00");
+  });
+
+  it("createTicket on a Friday afternoon in Brussels gives the next Monday", async () => {
+    const storage = await seed(initialState());
+    const actor = new CustomerAccount({ storage } as never, {} as never);
+    // Friday 2026-10-09 15:00 in Brussels (CEST, UTC+2): the weekend is skipped.
+    const result = await actor.createTicket({
+      dedupeKey: "call-10",
+      category: "repair_visit",
+      summary: "Fiber down",
+      nowMs: Date.UTC(2026, 9, 9, 13, 0, 0),
+    });
+    expect(result.window).toBe("2026-10-12 08:00-12:00");
+  });
+
   it("snapshot returns a copy of the persisted state", async () => {
     const seeded = initialState();
     seeded.calls.push({ id: "call-1", at: 1000 });
@@ -676,5 +706,154 @@ describe("CustomerAccount actor adapter", () => {
     snap.calls.push({ id: "mutated", at: 9999 });
     const stored = await storage.get<CustomerAccountState>("state");
     expect(stored?.calls).toEqual([{ id: "call-1", at: 1000 }]);
+  });
+});
+
+// ---------- actor logging ----------
+
+describe("CustomerAccount logging", () => {
+  const ACCOUNT = "DV-100001";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Seeds fresh storage, wires an actor named like a real instance
+  // (idFromName(account)), captures what the shared logger writes to
+  // stdout and returns a reader for the `"actor"` lines it emitted.
+  async function wire(state: CustomerAccountState = initialState()) {
+    const storage = createActorStorageFake();
+    await storage.put("state", state);
+    const actor = new CustomerAccount({ storage, id: ACCOUNT } as never, {} as never);
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const lines = (): Record<string, unknown>[] =>
+      spy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((text) => text.includes('"event":"actor"'))
+        .map((text) => JSON.parse(text) as Record<string, unknown>);
+    return { storage, actor, lines };
+  }
+
+  /** latency_ms is the timing helper's snapshot: an object with total and the actor hop, never a bare number. */
+  function expectLatencyShape(line: Record<string, unknown>) {
+    expect(line.latency_ms).toEqual(
+      expect.objectContaining({ total: expect.any(Number), actor: expect.any(Number) }),
+    );
+  }
+
+  it("recordCall writes one line per call with the trace id, outcome and masked account", async () => {
+    const { actor, lines } = await wire();
+    await actor.recordCall({ callId: "call-1", nowMs: 1000 }, "trace-1");
+    await actor.recordCall({ callId: "call-2", nowMs: 1001 }, "trace-1");
+    expect(lines()).toHaveLength(2);
+    const line = lines()[0];
+    expect(line).toMatchObject({
+      level: "info",
+      svc: "voice-tools",
+      event: "actor",
+      actor: "CustomerAccount",
+      method: "recordCall",
+      trace_id: "trace-1",
+      account: "DV-…001",
+      outcome: "recorded",
+    });
+    expectLatencyShape(line);
+    // The masked line must never carry the full account number.
+    expect(JSON.stringify(line)).not.toContain(ACCOUNT);
+  });
+
+  it("recordCall without a trace id still logs, with trace_id null", async () => {
+    const { actor, lines } = await wire();
+    await actor.recordCall({ callId: "call-1", nowMs: 1000 });
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]).toMatchObject({ method: "recordCall", trace_id: null });
+    expectLatencyShape(lines()[0]);
+  });
+
+  it("verify logs its outcome: ok for a match, wrong for a miss", async () => {
+    const { actor, lines } = await wire();
+    const expected = { postcode: "8630", accountNumber: "DV-100001" };
+    await actor.verify(
+      { mode: "full", submitted: expected, expected, nowMs: 1000 },
+      "trace-2",
+    );
+    await actor.verify(
+      {
+        mode: "full",
+        submitted: { postcode: "9999", accountNumber: "DV-100001" },
+        expected,
+        nowMs: 1001,
+      },
+      "trace-2",
+    );
+    expect(lines().map((l) => [l.method, l.trace_id, l.outcome])).toEqual([
+      ["verify", "trace-2", "ok"],
+      ["verify", "trace-2", "wrong"],
+    ]);
+    expectLatencyShape(lines()[0]);
+    expectLatencyShape(lines()[1]);
+  });
+
+  it("createTicket logs created the first time and existing on a retry", async () => {
+    const { actor, lines } = await wire();
+    const input = {
+      dedupeKey: "call-123|repair_visit",
+      category: "repair_visit" as TicketCategory,
+      summary: "Fiber down",
+      nowMs: 1000,
+    };
+    await actor.createTicket(input, "trace-3");
+    await actor.createTicket(input, "trace-3");
+    expect(lines().map((l) => [l.method, l.trace_id, l.outcome])).toEqual([
+      ["createTicket", "trace-3", "created"],
+      ["createTicket", "trace-3", "existing"],
+    ]);
+    expectLatencyShape(lines()[0]);
+    expectLatencyShape(lines()[1]);
+  });
+
+  it("a method that throws logs one error line and rethrows", async () => {
+    const { actor, lines } = await wire();
+    await expect(
+      actor.verify(
+        {
+          mode: "full",
+          submitted: { postcode: "8630", accountNumber: "DV-100001" },
+          expected: { postcode: "8630", accountNumber: "DV-100001" },
+          nowMs: Number.NaN,
+        },
+        "trace-4",
+      ),
+    ).rejects.toThrow(RangeError);
+    expect(lines()).toHaveLength(1);
+    const line = lines()[0];
+    expect(line).toMatchObject({
+      level: "error",
+      event: "actor",
+      actor: "CustomerAccount",
+      method: "verify",
+      trace_id: "trace-4",
+      account: "DV-…001",
+      outcome: "error",
+    });
+    expectLatencyShape(line);
+  });
+
+  it("a failing createTicket logs the error line too", async () => {
+    const { actor, lines } = await wire();
+    await expect(
+      actor.createTicket(
+        {
+          dedupeKey: "call-123",
+          category: "repair_visit",
+          summary: "Fiber down",
+          nowMs: Number.NaN,
+        },
+        "trace-5",
+      ),
+    ).rejects.toThrow(RangeError);
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]).toMatchObject({ method: "createTicket", level: "error", outcome: "error" });
+    expectLatencyShape(lines()[0]);
   });
 });
