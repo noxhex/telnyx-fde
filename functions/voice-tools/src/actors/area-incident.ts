@@ -8,22 +8,27 @@
  * change that set the current outbox (publish logging) and the deadline of
  * a due confirming write.
  *
- * Publishing (ADR-005's outbox): every method that can set the outbox saves
- * the state first — the decision is durable before any KV write — and then
- * tries to publish with a 300 ms budget. A success is confirmed with
- * `markPublished`; a failure is logged as `publish_retry` and retried by the
- * alarm, first after 5 s, then 15 s, then every 60 s, until it lands. The
- * ladder only moves forward: a failed publish never restarts it at 5 s (a
- * success resets it). The caller always gets its result either way.
+ * Publishing (ADR-005's outbox, ADR-019): `report` and `resolve` never write
+ * to KV — S1 measured a KV write at 1.1 to 1.8 s, far beyond any method's
+ * budget. A method that sets the outbox saves it first — the decision is
+ * durable before any KV write — sets the alarm to now and returns. The
+ * alarm writes the outbox with a 5,000 ms budget (alarms have 15 minutes).
+ * A success is confirmed with `markPublished`; a failure is logged as
+ * `publish_retry` and retried on the ladder, 5 s, then 15 s, then every
+ * 60 s, until it lands. The ladder only moves forward: a failed publish
+ * never restarts it at 5 s (a success resets it). Because `setAlarm`
+ * replaces a pending alarm, a change that moves the alarm to now can
+ * pre-empt scheduled work, so after handling the outbox the alarm always
+ * re-arms itself for whatever is still due.
  *
  * Confirming write (ADR-015): a publish that times out has an unknown
  * outcome — it may still land on the server after a NEWER publish has
  * succeeded and cleared the outbox, leaving KV stale for good. So a timed-
- * out publish marks a confirming write due 30 s later (longer than an actor
- * method's budget, after which no in-flight write from this call can still
- * be running). The alarm then writes the then-current status again, even if
- * a newer publish succeeded in between; only that write clears the marker,
- * and a failed confirming write is retried like any publish.
+ * out publish marks a confirming write due 30 s later (far longer than the
+ * slowest KV write S1 measured). The alarm then writes the then-current
+ * status again, even if a newer publish succeeded in between; only that
+ * write clears the marker, and a failed confirming write is retried like
+ * any publish.
  *
  * Logging: `report` and `resolve` write one `actor` line each with the
  * method, trace id, area, outcome and latency; each KV write writes a
@@ -58,8 +63,8 @@ const META_KEY = "meta";
 const BRUSSELS_TZ = "Europe/Brussels";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The KV write budget for one publish. */
-export const KV_PUBLISH_TIMEOUT_MS = 300;
+/** The KV write budget for one publish; the alarm has 15 minutes for it. */
+export const KV_PUBLISH_TIMEOUT_MS = 5_000;
 /** Publish retry backoff: 5 s, then 15 s, then every 60 s. */
 export const RETRY_DELAYS_MS = [5_000, 15_000, 60_000] as const;
 /** A timed-out publish has landed or lost after this; confirm with a rewrite. */
@@ -117,6 +122,9 @@ const INITIAL_META: AreaIncidentMeta = {
   confirmDueAtMs: null,
   lastStatus: null,
 };
+
+/** The `latency_ms` shape on the log lines: the timing helper's snapshot. */
+type LatencySnapshot = ReturnType<Timings["snapshot"]>;
 
 /** What `withTimeout` rejects with; a timeout means an unknown outcome. */
 class PublishTimeoutError extends Error {
@@ -197,17 +205,20 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
   async report(input: AreaReportInput): Promise<ReportResult> {
     const timings = startTimings();
     try {
-      const s = await this._load();
+      const s = await timings.time("actor", () => this._load());
       const { state, result } = reportDomain(s, { ...input, formatEta: this._formatEta });
-      await this._save(state);
-      const meta = await this._loadMeta();
+      await timings.time("actor", () => this._save(state));
+      const meta = await timings.time("actor", () => this._loadMeta());
       meta.windowMs = input.windowMs;
       if (result.incidentDeclared) {
         meta.changeTraceId = input.traceId ?? null;
         meta.lastStatus = state.outbox;
       }
-      await this._publishOutbox(state, meta);
-      await this._saveMeta(meta);
+      await timings.time("actor", () => this._saveMeta(meta));
+      if (state.outbox !== null && result.incidentDeclared) {
+        // Never write to KV here: the alarm publishes it straight away.
+        await timings.time("actor", () => this.ctx.storage.setAlarm(Date.now()));
+      }
       const outcome = result.incidentDeclared
         ? "declared"
         : result.counted
@@ -224,15 +235,16 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
   async resolve(input: AreaResolveInput): Promise<ResolveResult> {
     const timings = startTimings();
     try {
-      const s = await this._load();
+      const s = await timings.time("actor", () => this._load());
       const { state, result } = resolveDomain(s, { nowMs: input.nowMs });
       if (result.resolved) {
-        await this._save(state);
-        const meta = await this._loadMeta();
+        await timings.time("actor", () => this._save(state));
+        const meta = await timings.time("actor", () => this._loadMeta());
         meta.changeTraceId = input.traceId ?? null;
         meta.lastStatus = state.outbox;
-        await this._publishOutbox(state, meta);
-        await this._saveMeta(meta);
+        await timings.time("actor", () => this._saveMeta(meta));
+        // Never write to KV here: the alarm publishes it straight away.
+        await timings.time("actor", () => this.ctx.storage.setAlarm(Date.now()));
       }
       this._logCall({ method: "resolve", outcome: result.resolved ? "resolved" : "unchanged", timings, traceId: input.traceId });
       return result;
@@ -309,41 +321,26 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
   }
 
   /**
-   * Publish a pending outbox right after its decision. On failure the
-   * incident stays durable, and the alarm is armed up the retry ladder from
-   * wherever it stands — a failure never restarts the ladder at 5 s.
-   */
-  private async _publishOutbox(state: AreaIncidentState, meta: AreaIncidentMeta): Promise<void> {
-    const outbox = state.outbox;
-    if (outbox === null) {
-      return;
-    }
-    if (!(await this._tryPublish(state, outbox, meta))) {
-      meta.publishFailures += 1;
-      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(meta.publishFailures));
-    }
-  }
-
-  /**
-   * One outbox publish attempt. On success the decision is confirmed with
-   * `markPublished` and saved again, and `publish` is logged. On failure
-   * `publish_retry` is logged; a timeout also marks the confirming write
-   * due, because that write's outcome is unknown (ADR-015). Never throws.
+   * One outbox publish attempt, made by the alarm. On success the decision
+   * is confirmed with `markPublished` and saved again, and `publish` is
+   * logged. On failure `publish_retry` is logged; a timeout also marks the
+   * confirming write due, because that write's outcome is unknown
+   * (ADR-015). Never throws.
    */
   private async _tryPublish(
     state: AreaIncidentState,
     outbox: AreaStatus,
     meta: AreaIncidentMeta,
   ): Promise<boolean> {
-    const latencyMs = await this._attemptPublish(state.areaCode, outbox, meta, true);
-    if (latencyMs === null) {
+    const latency = await this._attemptPublish(state.areaCode, outbox, meta, true);
+    if (latency === null) {
       return false;
     }
     const cleared = markPublished(state, outbox.version);
     if (cleared !== state) {
       await this._save(cleared);
     }
-    this._logPublish("publish", state.areaCode, outbox.version, meta, latencyMs);
+    this._logPublish(state.areaCode, outbox.version, meta, latency);
     return true;
   }
 
@@ -357,16 +354,16 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
     status: AreaStatus,
     meta: AreaIncidentMeta,
   ): Promise<boolean> {
-    const latencyMs = await this._attemptPublish(areaCode, status, meta, false);
-    if (latencyMs === null) {
+    const latency = await this._attemptPublish(areaCode, status, meta, false);
+    if (latency === null) {
       return false;
     }
-    this._logPublish("publish", areaCode, status.version, meta, latencyMs);
+    this._logPublish(areaCode, status.version, meta, latency);
     return true;
   }
 
   /**
-   * One bounded KV write of `status`. Returns the write's latency in ms on
+   * One bounded KV write of `status`. Returns the timing snapshot on
    * success and logs `publish_retry`, returning null, on failure. When
    * `markTimeout` is set, a timeout also arms the confirming write (only
    * outbox publishes mark; a confirming write IS the correction). Success
@@ -377,7 +374,7 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
     status: AreaStatus,
     meta: AreaIncidentMeta,
     markTimeout: boolean,
-  ): Promise<number | null> {
+  ): Promise<LatencySnapshot | null> {
     const timings = startTimings();
     try {
       await timings.time("kv", () =>
@@ -395,27 +392,26 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
         version: status.version,
         trace_id: meta.changeTraceId,
         error: error instanceof Error ? error.message : String(error),
-        latency_ms: timings.snapshot().kv ?? timings.snapshot().total,
+        latency_ms: timings.snapshot(),
       };
       logger.log("warn", "publish_retry", fields);
       return null;
     }
     meta.publishFailures = 0;
-    return timings.snapshot().kv ?? timings.snapshot().total;
+    return timings.snapshot();
   }
 
   private _logPublish(
-    event: "publish",
     areaCode: string,
     version: number,
     meta: AreaIncidentMeta,
-    latencyMs: number,
+    latency: LatencySnapshot,
   ): void {
-    logger.log("info", event, {
+    logger.log("info", "publish", {
       area: areaCode,
       version,
       trace_id: meta.changeTraceId,
-      latency_ms: latencyMs,
+      latency_ms: latency,
     });
   }
 
@@ -434,7 +430,7 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
       trace_id: i.traceId ?? null,
       area: this.ctx.id,
       outcome: i.outcome,
-      latency_ms: i.timings.snapshot().total,
+      latency_ms: i.timings.snapshot(),
     };
     if (i.account !== undefined) {
       fields.account = maskAccount(i.account);

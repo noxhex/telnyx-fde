@@ -2,12 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KvNamespace } from "@telnyx/edge-runtime";
 
-import {
-  AreaIncident,
-  CONFIRM_AFTER_MS,
-  formatEtaBrussels,
-  KV_PUBLISH_TIMEOUT_MS,
-} from "../src/actors/area-incident.js";
+import { AreaIncident, formatEtaBrussels } from "../src/actors/area-incident.js";
 import type {
   AreaIncidentMeta,
   AreaReportInput,
@@ -647,7 +642,44 @@ describe("AreaIncident actor adapter", () => {
     expect(await storage.getAlarm()).toBeNull();
   });
 
-  it("publishes on declaration and confirms with markPublished", async () => {
+  it("a declaring report writes nothing to KV and sets the alarm to now", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor, storage } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "t1" }));
+    const result = await actor.report(
+      actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "t1" }),
+    );
+    expect(result.incidentDeclared).toBe(true);
+    // No KV call at all: the decision is durable, the alarm publishes it.
+    expect(kv.calls).toEqual([]);
+    expect(await storage.getAlarm()).toBe(T0); // now
+    const s = await storedState(storage);
+    expect(s.outbox?.state).toBe("outage");
+    expect(await storedMeta(storage)).toEqual({
+      windowMs: WINDOW_MS,
+      publishFailures: 0,
+      changeTraceId: "t1",
+      confirmDueAtMs: null,
+      lastStatus: s.outbox,
+    });
+  });
+
+  it("a resolve writes nothing to KV and sets the alarm to now", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor, storage } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    await actor.alarm({ retryCount: 0, isRetry: false }); // v1 published
+    kv.reset();
+    vi.setSystemTime(T0 + HOUR_MS);
+    const result = await actor.resolve({ nowMs: T0 + HOUR_MS });
+    expect(result.resolved).toBe(true);
+    expect(kv.calls).toEqual([]);
+    expect(await storage.getAlarm()).toBe(T0 + HOUR_MS); // now
+    expect((await storedState(storage)).outbox).toMatchObject({ state: "ok", version: 2 });
+  });
+
+  it("the alarm publishes the outbox and confirms with markPublished", async () => {
     const clock = createClockFake(T0);
     const kv = createKvFake(clock.now);
     const { actor, storage } = makeActor(kv);
@@ -655,6 +687,7 @@ describe("AreaIncident actor adapter", () => {
     const result = await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
     expect(result.incidentDeclared).toBe(true);
     expect(result.incidentId).toBe(INCIDENT_ID);
+    await actor.alarm({ retryCount: 0, isRetry: false });
     // The KV read model holds the declared status…
     const published = await kv.get<AreaStatus>("area/8630/status", { type: "json" });
     expect(published).toEqual({
@@ -671,48 +704,51 @@ describe("AreaIncident actor adapter", () => {
     expect(s.status).toBe("outage");
   });
 
-  it("keeps the result and the decision when the publish fails, and arms the alarm", async () => {
-    const { kv, fail } = switchableKv();
-    fail(new Error("kv_down"));
-    const { actor, storage } = makeActor(kv);
-    await actor.report(actorReport({ accountId: "DV-100001" }));
-    const result = await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
-    // The caller still gets its result: the decision was saved first.
-    expect(result.incidentDeclared).toBe(true);
-    const s = await storedState(storage);
-    expect(s.outbox?.state).toBe("outage");
-    expect(await storage.getAlarm()).toBe(T0 + 5_000);
-    expect(await storedMeta(storage)).toEqual({
-      windowMs: WINDOW_MS,
-      publishFailures: 1,
-      changeTraceId: null,
-      confirmDueAtMs: null,
-      lastStatus: s.outbox,
-    });
-    const retries = logged("publish_retry");
-    expect(retries).toHaveLength(1);
-    expect(retries[0]).toMatchObject({ area: "8630", version: 1, error: "kv_down" });
-  });
-
-  it("treats a hanging KV as a failed publish after 300 ms", async () => {
+  it("the alarm's publish times out at exactly 5,000 ms and marks the confirming write", async () => {
     const { kv, hang } = switchableKv();
     hang();
     const { actor, storage } = makeActor(kv);
-    await actor.report(actorReport({ accountId: "DV-100001" }));
-    const pending = actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
-    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
-    const result = await pending;
-    expect(result.incidentDeclared).toBe(true);
-    expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
-    expect((await storedState(storage)).outbox?.state).toBe("outage");
-    // A timed-out publish has an unknown outcome: a confirming write is due.
-    expect((await storedMeta(storage)).confirmDueAtMs).toBe(
-      T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS,
-    );
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "t1" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "t1" }));
+    const run = actor.alarm({ retryCount: 0, isRetry: false });
+    await vi.advanceTimersByTimeAsync(5_000); // the literal KV write budget
+    await run;
+    expect(logged("publish_retry")).toHaveLength(1);
     expect(logged("publish_retry")[0]).toMatchObject({
+      area: "8630",
+      version: 1,
+      trace_id: "t1",
       error: "kv_publish_timeout",
-      latency_ms: KV_PUBLISH_TIMEOUT_MS,
+      latency_ms: { total: 5_000, kv: 5_000 },
     });
+    // The confirming write is marked 30 s out, the ladder is armed at +5 s.
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(T0 + 35_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(1);
+    expect(await storage.getAlarm()).toBe(T0 + 10_000);
+    expect((await storedState(storage)).outbox?.state).toBe("outage");
+  });
+
+  it("a held write that settles 1 ms before the 5,000 ms timeout succeeds", async () => {
+    let releaseHeld!: () => void;
+    const gate = new Promise<void>((resolveGate) => {
+      releaseHeld = resolveGate;
+    });
+    const kv = { put: () => gate } as unknown as KvNamespace;
+    const { actor, storage } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    storage.reset();
+    const run = actor.alarm({ retryCount: 0, isRetry: false });
+    await vi.advanceTimersByTimeAsync(4_999);
+    releaseHeld();
+    await run;
+    expect((await storedState(storage)).outbox).toBeNull();
+    expect(logged("publish_retry")).toEqual([]);
+    expect(logged("publish")).toHaveLength(1);
+    expect(logged("publish")[0].latency_ms).toEqual({ total: 4_999, kv: 4_999 });
+    expect((await storedMeta(storage)).confirmDueAtMs).toBeNull();
+    // Nothing is still due: the alarm is not re-armed.
+    expect(storage.calls.filter((c) => c.method === "setAlarm")).toEqual([]);
   });
 
   it("retries with 5 s, 15 s, then 60 s backoff until the publish lands", async () => {
@@ -721,29 +757,35 @@ describe("AreaIncident actor adapter", () => {
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    // The change armed the alarm to fire straight away.
+    expect(await storage.getAlarm()).toBe(T0);
+
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect(await storage.getAlarm()).toBe(T0 + 5_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(1);
 
+    vi.setSystemTime(T0 + 5_000);
     await actor.alarm({ retryCount: 0, isRetry: false });
-    expect(await storage.getAlarm()).toBe(T0 + 15_000);
-    expect((await storage.get<{ publishFailures: number }>("meta"))?.publishFailures).toBe(2);
+    expect(await storage.getAlarm()).toBe(T0 + 20_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(2);
 
-    vi.setSystemTime(T0 + 15_000);
+    vi.setSystemTime(T0 + 20_000);
     await actor.alarm({ retryCount: 0, isRetry: false });
-    expect(await storage.getAlarm()).toBe(T0 + 15_000 + 60_000);
-    expect((await storage.get<{ publishFailures: number }>("meta"))?.publishFailures).toBe(3);
+    expect((await storedMeta(storage)).publishFailures).toBe(3);
+    expect(await storage.getAlarm()).toBe(T0 + 80_000);
 
-    vi.setSystemTime(T0 + 15_000 + 60_000);
+    vi.setSystemTime(T0 + 80_000);
     await actor.alarm({ retryCount: 0, isRetry: false });
-    expect((await storage.get<{ publishFailures: number }>("meta"))?.publishFailures).toBe(4);
-    expect(await storage.getAlarm()).toBe(T0 + 15_000 + 120_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(4);
+    expect(await storage.getAlarm()).toBe(T0 + 140_000);
 
     // KV recovers: the next alarm publishes and the backoff stops.
     ok();
-    vi.setSystemTime(T0 + 15_000 + 120_000);
+    vi.setSystemTime(T0 + 140_000);
     storage.reset();
     await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedState(storage)).outbox).toBeNull();
-    expect((await storage.get<{ publishFailures: number }>("meta"))?.publishFailures).toBe(0);
+    expect((await storedMeta(storage)).publishFailures).toBe(0);
     expect(storage.calls.filter((c) => c.method === "setAlarm")).toEqual([]);
   });
 
@@ -753,6 +795,7 @@ describe("AreaIncident actor adapter", () => {
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    await actor.alarm({ retryCount: 0, isRetry: false }); // publishes v1
     storage.reset();
     kv.reset();
     await actor.alarm({ retryCount: 1, isRetry: true });
@@ -802,15 +845,17 @@ describe("AreaIncident actor adapter", () => {
     });
   });
 
-  it("resolve publishes the ok status and clears the incident", async () => {
+  it("resolve publishes the ok status through the alarm and clears the incident", async () => {
     const clock = createClockFake(T0);
     const kv = createKvFake(clock.now);
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    await actor.alarm({ retryCount: 0, isRetry: false }); // publishes v1
     vi.setSystemTime(T0 + HOUR_MS);
     const result = await actor.resolve({ nowMs: T0 + HOUR_MS });
     expect(result).toEqual({ resolved: true, incidentId: INCIDENT_ID });
+    await actor.alarm({ retryCount: 0, isRetry: false }); // publishes v2
     const published = await kv.get<AreaStatus>("area/8630/status", { type: "json" });
     expect(published).toEqual({
       state: "ok",
@@ -855,7 +900,7 @@ describe("AreaIncident actor adapter", () => {
       area: "8630",
       account: "DV-…001",
       outcome: "counted",
-      latency_ms: 0,
+      latency_ms: { total: 0, actor: 0 },
     });
     expect(lines[1].outcome).toBe("duplicate");
     expect(lines[2].outcome).toBe("declared");
@@ -880,8 +925,9 @@ describe("AreaIncident actor adapter", () => {
     await actor.resolve({ nowMs: T0 + HOUR_MS, traceId: "trace-9" });
     const lines = logged("actor").filter((line) => line.method === "resolve");
     expect(lines.map((line) => line.outcome)).toEqual(["unchanged", "resolved"]);
-    expect(lines[0]).toMatchObject({ method: "resolve", trace_id: "trace-9", area: "8630", latency_ms: 0 });
-    expect(lines[1].latency_ms).toBe(0);
+    expect(lines[0]).toMatchObject({ method: "resolve", trace_id: "trace-9", area: "8630" });
+    expect(lines[0].latency_ms).toEqual({ total: 0, actor: 0 });
+    expect(lines[1].latency_ms).toEqual({ total: 0, actor: 0 });
     expect("account" in lines[0]).toBe(false);
   });
 
@@ -925,16 +971,17 @@ describe("AreaIncident actor adapter", () => {
     await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-plain" }));
     fail(new Error("kv_down"));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-declare" }));
-    // The declaring change's publish failed: publish_retry carries its trace id.
+    // The declaring change armed the alarm; its failed publishes carry its trace id.
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect(logged("publish_retry")).toHaveLength(1);
     expect(logged("publish_retry")[0]).toMatchObject({
       area: "8630",
       version: 1,
       trace_id: "trace-declare",
-      latency_ms: 0,
+      latency_ms: { total: 0, kv: 0 },
     });
-    // The alarm's failed retries carry the same trace id.
-    await actor.alarm({ retryCount: 0, isRetry: false });
+    // The ladder's failed retries carry the same trace id.
+    await actor.alarm({ retryCount: 1, isRetry: true });
     expect(logged("publish_retry")).toHaveLength(2);
     expect(logged("publish_retry")[1]).toMatchObject({ version: 1, trace_id: "trace-declare" });
     // And so does the eventual publish from the alarm.
@@ -946,44 +993,59 @@ describe("AreaIncident actor adapter", () => {
       area: "8630",
       version: 1,
       trace_id: "trace-declare",
-      latency_ms: 0,
+      latency_ms: { total: 0, kv: 0 },
     });
   });
 
-  it("a successful inline publish logs publish at once", async () => {
+  it("a publish from the alarm logs publish, and the method itself never does", async () => {
     const kv = createKvFake(createClockFake(T0).now);
     const { actor } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-1" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-1" }));
+    expect(logged("publish")).toEqual([]);
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect(logged("publish")).toHaveLength(1);
-    expect(logged("publish")[0]).toMatchObject({ version: 1, trace_id: "trace-1" });
+    expect(logged("publish")[0]).toMatchObject({
+      version: 1,
+      trace_id: "trace-1",
+      latency_ms: { total: 0, kv: 0 },
+    });
     expect(logged("publish_retry")).toEqual([]);
   });
 
   // ---------- the retry ladder does not restart ----------
 
-  it("repeated failed inline publishes climb the ladder instead of restarting it", async () => {
+  it("repeated failed publishes climb the ladder instead of restarting it", async () => {
     const { kv, fail } = switchableKv();
     fail(new Error("kv_down"));
     const { actor, storage } = makeActor(kv);
-    // v1 declares and its publish fails: the ladder starts at 5 s.
+    // v1 declares; the alarm fires straight away and fails: the ladder starts at 5 s.
     await actor.report(actorReport({ accountId: "DV-100001", traceId: "t1" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "t1" }));
-    expect(await storage.getAlarm()).toBe(T0 + 5_000);
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedMeta(storage)).publishFailures).toBe(1);
-    // The resolve's publish fails next: up the ladder to 15 s, not back to 5.
+    expect(await storage.getAlarm()).toBe(T0 + 5_000);
+    // A new change (resolve, v2) moves the alarm to now, ahead of the ladder rung…
+    vi.setSystemTime(T0 + 2_000);
     await actor.resolve({ nowMs: T0 + 2_000, traceId: "t2" });
-    expect(await storage.getAlarm()).toBe(T0 + 15_000);
+    expect(await storage.getAlarm()).toBe(T0 + 2_000);
+    // …and its failure goes UP the ladder to 15 s, not back to 5.
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedMeta(storage)).publishFailures).toBe(2);
-    // A plain report finds the v2 outbox still pending and retries it: 60 s.
-    await actor.report(actorReport({ accountId: "DV-100001", nowMs: T0 + 3_000, traceId: "t3" }));
-    expect(await storage.getAlarm()).toBe(T0 + 60_000);
+    expect(await storage.getAlarm()).toBe(T0 + 17_000);
+    // A third change (re-declare, v3) moves the alarm to now again…
+    vi.setSystemTime(T0 + 3_000);
+    await actor.report(actorReport({ accountId: "DV-100003", nowMs: T0 + 3_000, traceId: "t3" }));
+    const declaring = await actor.report(
+      actorReport({ accountId: "DV-100004", nowMs: T0 + 3_001, traceId: "t3" }),
+    );
+    expect(declaring.incidentDeclared).toBe(true);
+    expect(await storage.getAlarm()).toBe(T0 + 3_000);
+    // …and its failure lands on 60 s.
+    await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedMeta(storage)).publishFailures).toBe(3);
-    // A new declaration replaces the outbox and fails again: still 60 s.
-    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 3_001, traceId: "t3" }));
-    expect(await storage.getAlarm()).toBe(T0 + 60_000);
-    expect((await storedMeta(storage)).publishFailures).toBe(4);
-    expect(logged("publish_retry")).toHaveLength(4);
+    expect(await storage.getAlarm()).toBe(T0 + 63_000);
+    expect(logged("publish_retry")).toHaveLength(3);
   });
 
   // ---------- confirming write ----------
@@ -1010,29 +1072,33 @@ describe("AreaIncident actor adapter", () => {
     } as unknown as KvNamespace;
     const { actor, storage } = makeActor(kv);
 
-    // v1 declares; its publish is held until after the timeout.
+    // v1 declares; the alarm's publish is held until after the 5,000 ms timeout.
     await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-v1" }));
-    const declaring = actor.report(
-      actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }),
-    );
-    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
-    expect((await declaring).incidentDeclared).toBe(true);
-    expect((await storedMeta(storage)).confirmDueAtMs).toBe(
-      T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS,
-    );
-    expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }));
+    const first = actor.alarm({ retryCount: 0, isRetry: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await first;
+    expect(logged("publish_retry")[0]).toMatchObject({
+      error: "kv_publish_timeout",
+      trace_id: "trace-v1",
+    });
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(T0 + 35_000);
+    expect(await storage.getAlarm()).toBe(T0 + 10_000);
 
-    // v2 (a resolve) publishes fine while the v1 write is still held.
+    // A newer change arrives while the confirming write is pending. It moves
+    // the alarm to now (ahead of the ladder rung) and writes no KV itself.
     holding = false;
-    vi.setSystemTime(T0 + 400);
-    await actor.resolve({ nowMs: T0 + 400, traceId: "trace-v2" });
-    expect(landed.at(-1)).toMatchObject({ state: "ok", version: 2, updatedAt: T0 + 400 });
-    expect((await storedState(storage)).outbox).toBeNull();
+    vi.setSystemTime(T0 + 5_100);
+    await actor.resolve({ nowMs: T0 + 5_100, traceId: "trace-v2" });
+    expect(await storage.getAlarm()).toBe(T0 + 5_100);
+    expect(landed).toEqual([]);
 
-    // The alarm fires before the confirming write is due: it just re-arms.
-    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    // The alarm publishes v2 straight away — and re-arms for the confirming
+    // write, which is still due at its own time.
     await actor.alarm({ retryCount: 0, isRetry: false });
-    expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS);
+    expect(landed.at(-1)).toMatchObject({ state: "ok", version: 2, updatedAt: T0 + 5_100 });
+    expect((await storedState(storage)).outbox).toBeNull();
+    expect(await storage.getAlarm()).toBe(T0 + 35_000);
 
     // The held v1 write finally lands, clobbering v2 with the stale status.
     releaseHeld();
@@ -1040,15 +1106,15 @@ describe("AreaIncident actor adapter", () => {
     await Promise.resolve();
     expect(landed.at(-1)).toMatchObject({ state: "outage", version: 1 });
 
-    // Once 30 s have passed, the alarm's confirming write restores the newest status.
-    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS);
+    // At the due time the confirming write restores the newest status.
+    vi.setSystemTime(T0 + 35_000);
     await actor.alarm({ retryCount: 0, isRetry: false });
     expect(landed.at(-1)).toEqual({
       state: "ok",
       incidentId: null,
       eta: null,
       version: 2,
-      updatedAt: T0 + 400,
+      updatedAt: T0 + 5_100,
     });
     expect((await storedMeta(storage)).confirmDueAtMs).toBeNull();
     expect(logged("publish").at(-1)).toMatchObject({
@@ -1063,30 +1129,30 @@ describe("AreaIncident actor adapter", () => {
     hang();
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-v1" }));
-    const declaring = actor.report(
-      actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }),
-    );
-    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
-    await declaring;
-    const dueAt = T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS;
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }));
+    const first = actor.alarm({ retryCount: 0, isRetry: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await first;
+    const dueAt = T0 + 35_000;
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(dueAt);
 
-    // The ladder's first alarm publishes the outbox once KV answers again…
+    // The ladder's next alarm publishes the outbox once KV answers again…
     ok();
-    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    vi.setSystemTime(T0 + 10_000);
     await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedState(storage)).outbox).toBeNull();
     // …but the timed-out write still owes a confirming write at dueAt.
     expect(await storage.getAlarm()).toBe(dueAt);
 
-    // When the confirming write times out too, the marker stays and the
-    // ladder arms the next attempt.
+    // When the confirming write times out at 5,000 ms as well, the marker
+    // stays and the ladder arms the next attempt.
     hang();
     vi.setSystemTime(dueAt);
     const confirming = actor.alarm({ retryCount: 0, isRetry: false });
-    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(5_000);
     await confirming;
     expect((await storedMeta(storage)).confirmDueAtMs).toBe(dueAt);
     expect((await storedMeta(storage)).publishFailures).toBe(1);
-    expect(await storage.getAlarm()).toBe(dueAt + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    expect(await storage.getAlarm()).toBe(dueAt + 10_000);
   });
 });
