@@ -116,6 +116,17 @@ be378fe6-fb1b-4d9e-bf65-540d5b97c2c9   fde-smoke   provision_ok   Oct 9, 2026, 1
 
 **Design impact.** ADR-015. A timeout on a write is an unknown outcome, so every record-creating write takes a dedupe key, and Telnyx API creates send an `Idempotency-Key`.
 
+**Second occurrence, 10 Oct 2026.** Thiago created the project namespace `duinvezel`, and the CLI timed out the same way while the create succeeded. The list shows one namespace of that name, so checking before a retry kept it from being created twice. Its id is in `infra/ids.json`.
+
+```text
+$ telnyx-edge storage kv list
+KV ID                                  NAME        STATUS         CREATED AT
+504d09fa-a57f-4d70-b134-6b97ea537ae1   duinvezel   provision_ok   Oct 10, 2026, 01:48
+be378fe6-fb1b-4d9e-bf65-540d5b97c2c9   fde-smoke   provision_ok   Oct 9, 2026, 12:02
+```
+
+Two timeouts out of two namespace creates make this the normal behaviour of `telnyx-edge storage kv create` for now, not a one-off.
+
 ## 6. Docker bridge networking failed after a kernel update
 
 **Date** 9 Oct 2026 · **Area** Local dev, Docker
