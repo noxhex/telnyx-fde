@@ -256,6 +256,30 @@ Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings
 
 Each of these requests includes one round trip to the counter actor.
 
+## S3 findings
+
+**Date** 10 Oct 2026 · **Area** Edge Compute, MCP transport
+
+**The official SDK runs in the edge fetch handler.** `@modelcontextprotocol/sdk` 1.32.1 ships `WebStandardStreamableHTTPServerTransport` (`server/webStandardStreamableHttp.js`), a pure Web Standard transport: `Request`/`Response`/`ReadableStream`, no `node:` imports. In stateless mode (`sessionIdGenerator: undefined`) with `enableJsonResponse: true`, every POST gets one `application/json` body back and no `Mcp-Session-Id` header. The card's whole behaviour matrix passed locally against `telnyx-edge dev` (CLI 0.5.10): `initialize` echoes `2025-11-25` / `2025-06-18` / `2025-03-26` and answers `2025-06-18` to anything else (`2024-11-05` included), notifications get a bare 202, `ping` gets `{}`, `tools/list` and `tools/call` `echo` work, an unknown tool gets JSON-RPC error -32602 over HTTP 200, `GET /mcp` gets a 405 and unknown paths a 404, and every request writes one JSON log line with the rpc method/id, `user_agent`, `has_authorization` and the `mcp-protocol-version` header. MCP Inspector 0.17.x (`--cli --transport http`) listed the tools and called `echo` with the text "hello" against the local server.
+
+**Two SDK defaults needed overriding.** The negotiation: the SDK echoes the 2024-* versions and falls back to its own latest, so a `setRequestHandler` replacement pins the card's three versions and the `2025-06-18` fallback. And a stateless transport cannot be reused (`Stateless transport cannot be reused across requests`), so each POST builds a fresh `Server` + transport pair; both are plain objects, no I/O at construction.
+
+**The SDK server enforces the Streamable HTTP accept rules itself.** A POST whose `Accept` lacks either `application/json` or `text/event-stream` gets a 406 JSON-RPC error before any dispatch. Worth knowing if a client (Telnyx included) ever sends a bare `Accept: application/json`.
+
+**What the reference client (inspector's SDK client) sends locally.**
+
+```text
+{"event":"mcp_request","route":"mcp","status":200,"user_agent":"node","has_authorization":false,"mcp_protocol_version":null,"rpc_method":"initialize","rpc_id":0}
+{"event":"mcp_request","route":"mcp","status":202,"user_agent":"node","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"notifications/initialized","rpc_id":null}
+{"event":"mcp_request","route":"method_not_allowed","status":405,"user_agent":"node","has_authorization":false,"mcp_protocol_version":"2025-11-25"}
+{"event":"mcp_request","route":"mcp","status":200,"user_agent":"node","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"tools/list","rpc_id":1}
+{"event":"mcp_request","route":"mcp","status":200,"user_agent":"node","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"tools/call","rpc_id":2}
+```
+
+User agent is `node`. One `initialize` per connection, with integer id 0 and no `mcp-protocol-version` header; every request after it carries the negotiated version in that header, notifications included. Right after `initialize` the client opens `GET /mcp` for the server-to-client stream, takes our 405 without complaint and proceeds to `tools/list` and `tools/call`. JSON-RPC ids are integers counting up from 0 per connection.
+
+**Pending: what Telnyx's client sends.** Card S3 steps 3-4 are hands-on (Thiago): `time telnyx-edge ship`, register the deployed `/mcp` URL as an MCP server of type `http` on the `spike-routing` assistant, ask it to call `echo` with the text "hello", then read `telnyx-edge logs mcp-spike --type runtime`. Record here: the protocol version Telnyx requests, its user agent, whether it initializes once per call or per request, which headers arrive (an `authorization` header present? `mcp-protocol-version`? the full `Accept`?), and whether it attempts `GET /mcp` and tolerates the 405 (ADR-009 names that the fallback if it does not). Also record the ship time under ADR-016.
+
 ---
 
 ## Template

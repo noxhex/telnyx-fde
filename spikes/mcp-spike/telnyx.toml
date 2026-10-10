@@ -1,0 +1,7 @@
+name = "mcp-spike"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[edge_compute]
+func_id = "fdb8da70-92cd-4aef-b92e-c5a30c9d319e"
+func_name = "mcp-spike"
