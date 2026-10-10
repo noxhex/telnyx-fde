@@ -39,9 +39,10 @@ Duinvezel's voice assistant answers every call and does four things.
       │       │                 ▼   ▼                             ▼
       │       │        CustomerAccount actor              AreaIncident actor
       │       │        (one per account, shared)          (one per postcode)
-      │       │                                                   │ publishes status
+      │       │        Session actor                              │ publishes status
+      │       │        (one per call, shared)                     │
       │       ▼                                                   ▼
-      │     KV: sessions, CRM cache, flags, area status read model
+      │     KV: CRM cache, flags, area status read model
       ▼
    mock-crm (stand-in for the ISP back office)
 
@@ -58,16 +59,17 @@ Duinvezel's voice assistant answers every call and does four things.
 | `mock-crm` | Edge Function (TypeScript) | Fake ISP back office (customers, accounts, line tests) with switchable latency and failures |
 | `CustomerAccount` | Stateful Actor, one per account | Call history, verification attempts and lockout, repair tickets |
 | `AreaIncident` | Stateful Actor, one per postcode | Outage reports, the incident decision, subscribers, publishing area status to KV |
+| `Session` | Stateful Actor, one per call | The call's session (trace id, identity level, account, area, disclosure, verification failures without an account), deleted by an alarm when it expires |
 | `Canary` | Stateful Actor, single instance | Synthetic end-to-end check every 30 seconds, and the alert |
-| KV namespace `duinvezel` | Telnyx KV | Sessions, CRM cache, feature flags, area status read model, canary results |
+| KV namespace `duinvezel` | Telnyx KV | CRM cache, feature flags, area status read model, callback requests, canary results |
 
 ## A call, step by step
 
 1. Telnyx answers the call and POSTs `assistant.initialization` to `voice-context /dv`, signed with Ed25519.
-2. `voice-context` checks the signature and looks the caller up by number (KV cache first, then `mock-crm`). It reads the area status from KV, records the call on the caller's `CustomerAccount` actor, opens a session in KV and mints a per-call token.
+2. `voice-context` checks the signature and looks the caller up by number (its memory cache, then the KV cache raced against `mock-crm`). It reads the area statuses (memory cache, then KV), records the call on the caller's `CustomerAccount` actor, creates the call's `Session` actor and mints a per-call token.
 3. It answers with `dynamic_variables` (greeting, identity flags, area status, repeat-caller flag) and `encrypted_dynamic_variables.mcp_token`, inside the call setup budget.
 4. The workflow plays the disclosure verbatim. The Route call tool node then logs it and routes on those variables before the caller has to say anything.
-5. Prompt nodes call MCP tools on `voice-tools`. Telnyx decrypts the token and sends it as the bearer token, so the model never sees it. `voice-tools` validates the token, loads the session and acts only on that session's account and area.
+5. Prompt nodes call MCP tools on `voice-tools`. Telnyx decrypts the token and sends it as the bearer token, so the model never sees it. `voice-tools` validates the token, loads the session from its `Session` actor and acts only on that session's account and area.
 6. `report_outage` goes to the `AreaIncident` actor for the caller's postcode. The actor dedupes by account, counts reports inside the window, declares the incident once the threshold is reached and publishes the new status to KV.
 7. The next caller from that postcode reads the new status at call setup and hears the outage notice seconds into the call.
 
@@ -76,11 +78,11 @@ Duinvezel's voice assistant answers every call and does four things.
 | State | Home | Why |
 |---|---|---|
 | Outage reports and the incident decision per area | `AreaIncident` actor | Reporters arrive concurrently, and the count, the per-account dedupe and the incident transition must each happen exactly once. KV is last-write-wins with no compare-and-swap. |
-| Area status at call setup | KV read model, written by the actor | During an outage every caller from the area needs it. Reading the actor would queue them all on one single-threaded instance, and a second of staleness is fine for an announcement. |
+| Area status at call setup | KV read model, written by the actor, behind a 10-second memory cache in each container | During an outage every caller from the area needs it. Reading the actor would queue them all on one single-threaded instance. A KV read takes about 0.8 s (DEBUGLOG issue 11), so a warm container answers from memory, and up to 10 seconds of extra staleness is fine for an announcement. |
 | Verification attempts, lockout, call history, tickets | `CustomerAccount` actor | Two calls guessing the same account must not both get a third attempt. Attempts must survive a hang-up, and an alarm lifts the lockout. |
-| Per-call session | KV with a two-hour TTL | One call is one sequential writer, and the data is short-lived. |
-| CRM lookups | KV cache with a ten-minute TTL | Keeps call setup inside its budget and gives a measurable hit rate. |
-| Feature flags | KV | Threshold, fault injection and path toggles change without a redeploy, even mid-demo. |
+| Per-call session | `Session` actor, one per call, deleted by its alarm two hours after creation (ADR-019) | Call setup creates it and every MCP call reads it. An actor round trip takes about 140 ms warm and 280 ms after a pause, where a KV write takes about 1.4 s and a read about 0.8 s. One call is one sequential writer, so the instance never queues. |
+| CRM lookups | KV cache with a ten-minute TTL, behind a 60-second memory cache in each container | The memory cache answers repeat callers on a warm container. The KV cache recognises callers across containers, which the `crm_fail` part of the demo needs, and gives a measurable hit rate. |
+| Feature flags | KV, behind a 10-second memory cache in each container | Threshold, fault injection and path toggles change without a redeploy, even mid-demo, and apply within 10 seconds. |
 | Caller identity for tools | Per-call token in `encrypted_dynamic_variables` | The model never sees it, tools cannot be talked into another account, and every MCP request carries the trace id. |
 
 ## Data contracts
@@ -92,14 +94,13 @@ KV keys allow only `a-z A-Z 0-9 - _ / = .`. Phone numbers therefore drop the `+`
 | Key | Value | TTL | Written by |
 |---|---|---|---|
 | `crm/phone/<digits>` | Customer summary from mock-crm, or a "not found" marker | 600 s | voice-context |
-| `session/<sid>` | Session (trace id, identity level, account, area, flags snapshot) | 7200 s | voice-context, voice-tools |
 | `area/<postcode>/status` | `{ state, incidentId, eta, version, updatedAt }` | none | AreaIncident actor |
 | `callback/<sid>` | Callback request from a caller without an account | 7 days | voice-tools |
 | `flags/global` | Feature flags as JSON | none | scripts or by hand |
 | `canary/last` | Last canary run with per-check latency | none | Canary actor |
 | `canary/probe` | Scratch value for the health check's KV round trip | 60 s | voice-context |
 
-`<sid>` is the first 32 hex characters of a SHA-256 hash of the call control id.
+`<sid>` is the first 32 hex characters of a SHA-256 hash of the call control id. Sessions created through `POST /internal/sessions` get a random sid of the same form.
 
 ### Actors
 
@@ -107,7 +108,10 @@ KV keys allow only `a-z A-Z 0-9 - _ / = .`. Phone numbers therefore drop the `+`
 |---|---|---|
 | `CustomerAccount` | account number, for example `DV-100231` | `recordCall`, `verify`, `createTicket`, `snapshot`, `alarm` |
 | `AreaIncident` | postcode, for example `8630` | `report`, `status`, `resolve`, `subscribe` (stretch), `alarm` |
+| `Session` | sid | `create`, `get`, `markDisclosure`, `setVerified`, `recordVerifyFailure`, `alarm` |
 | `Canary` | `canary` | `start`, `lastRun`, `alarm` |
+
+The session document holds `sid`, `traceId`, `identity`, `accountNumber`, `postcode` and `lineId` when known, `callerPhone` (E.164, for callbacks), `createdAt`, `expiresAt` (two hours after creation), `disclosedAt`, and the verification failures and lock for account numbers that do not exist. Card T18 defines it in full.
 
 Actor classes are thin adapters. They load state, call a pure domain function from `src/domain/`, save the result and set alarms. The domain functions hold all the rules and carry the unit tests.
 
@@ -130,8 +134,8 @@ All tools act on the session behind the bearer token. None of them takes an acco
 
 | Tool | Input | Result | Touches | Node |
 |---|---|---|---|---|
-| `verify_account` | `account_number` (optional for a number match), `postcode` | verified or not, attempts left, lockout minutes | mock-crm, `CustomerAccount.verify`, session | Verify account |
-| `check_area_status` | `postcode` | area name, state, ETA | KV read model | Verify account |
+| `verify_account` | `account_number` (optional for a number match), `postcode` | verified or not, attempts left, lockout minutes | mock-crm, `CustomerAccount.verify`, `Session` | Verify account |
+| `check_area_status` | `postcode` | area name, state, ETA | KV read model, through the memory cache | Verify account |
 | `run_line_diagnostics` | none | line state, signal, last seen, suggestion | mock-crm line test (slow on purpose) | Diagnose |
 | `report_outage` | `symptom` (`no_connection`, `slow`, `intermittent`, `other`) | reports in window, threshold, whether this report declared the incident, ETA | `AreaIncident.report` | Outage help, Diagnose |
 | `create_ticket` | `category` (`repair_visit`, `callback`, `other`), `summary` | ticket id, visit window | `CustomerAccount.createTicket` with a dedupe key | Repair ticket, Take message |
@@ -141,19 +145,22 @@ When the session's identity level is below what a tool needs, the tool returns `
 
 ## Call setup latency budget
 
-The webhook's default timeout is 1.5 s, with a maximum of 10 s. We set `dynamic_variables_webhook_timeout_ms` from the cold start measured in spike S1, and target a p95 server time under 800 ms.
+**Webhook timeout.** The assistant sets `dynamic_variables_webhook_timeout_ms` to 4,000, approved by Thiago on 10 October. Telnyx's default is 1,500 ms and its maximum 10,000 ms. The rule from spike S1 takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. S1 measured KV calls from inside a function at about 0.8 s for a read and 1.4 s for a write (DEBUGLOG issue 11). On the first design, with its session in KV, the slowest call setup (a CRM cache miss after a pause) came to about 4.8 s, and 1.5 times that is far above the cap. So the cap applies, and the design below was reworked to fit under it, with the session in an actor and memory caches in front of the KV reads (ADR-019). T11 sets the value on the assistant.
 
-| Step | Budget | Measured in S1, warm min / median / max |
-|---|---|---|
-| Signature check | 5 ms | not measured, CPU only |
-| CRM lookup, cache hit or miss | 50 or 450 ms | KV read 668 / 806 / 941 ms. A miss adds the mock-crm call, which S1 did not measure |
-| Area status read (KV) | 50 ms | KV read 668 / 806 / 941 ms |
-| `CustomerAccount.recordCall` | 300 ms | 134 / 141 / 160 ms, and 269 to 284 ms after a pause |
-| Session write and token | 60 ms | KV write 1,146 / 1,355 / 1,496 ms, and 1,757 ms after a pause |
+**Budget.** The dependency calls share a soft budget of 3,000 ms. When it runs out, `/dv` answers with what it knows. That leaves about a second of the timeout for the signature check, the token, cold-start work and the network. The target is a p95 server time under 3 s, and a warm container should answer most calls in about 0.2 s.
 
-The measured KV calls are more than ten times their budgets (DEBUGLOG, S1 measurements). New budgets and the webhook timeout wait for Thiago's decision.
+| Step | Timeout | Expected | Measured in S1, warm min / median / max |
+|---|---|---|---|
+| Signature check | none, CPU only | under 5 ms | not measured |
+| Flags, 10 s memory cache, else KV | 1,000 ms, then defaults | under 1 ms from memory, about 0.8 s from KV | KV read 668 / 806 / 941 ms |
+| CRM lookup, 60 s memory cache, else the KV cache raced against mock-crm | 1,500 ms | under 1 ms from memory, about 0.8 s on a KV hit, about 1.2 s on a miss | KV read as above. The mock-crm call is an estimate until T10 measures it |
+| All five area statuses, 10 s memory cache, else KV | 1,500 ms | under 1 ms from memory, about 0.8 s from KV | KV read as above |
+| `CustomerAccount.recordCall` | 600 ms | about 0.15 s, 0.3 s after a pause | 134 / 141 / 160 ms, and 269 to 284 ms after a pause |
+| `Session.create` | 1,000 ms | as `recordCall`, plus whatever a new instance costs | actor round trip as above. A new instance was not measured |
+| CRM cache write in KV, after mock-crm answered | 2,500 ms, cut by the soft budget | about 1.4 s, 1.8 s after a pause | KV write 1,146 / 1,355 / 1,496 ms, and 1,757 ms after a pause |
+| Token mint and encryption | none, CPU only | under 5 ms | not measured |
 
-The CRM lookup runs first because it yields the account. The area read, the actor call and the session write then run in parallel. Each dependency has its own timeout, and a timeout degrades the answer (unknown caller, no repeat flag) instead of failing the webhook.
+The flags, the CRM lookup and the five area statuses start together. There are only five postcodes, so the area reads need not wait for the CRM. Once the CRM lookup has answered, `recordCall`, `Session.create` and, after a mock-crm answer, the CRM cache write run in parallel. That gives about 0.2 s when a warm container has the flags, the areas and the caller in memory, about 1.0 to 1.2 s when they come from KV, and about 2.6 to 3.0 s on a CRM cache miss, where the KV write dominates. Each dependency has its own timeout, and a timeout degrades the answer (unknown caller, no repeat flag, no outage notice) instead of failing the webhook. T10 times the first request after each ship, which is a guaranteed cold start, and voice-context's call to mock-crm.
 
 ## Security model
 
@@ -172,6 +179,7 @@ The CRM lookup runs first because it yields the account. The area read, the acto
 | mock-crm slow or down | Caller treated as unknown and asked to verify | `crm_timeout` in the `dv` log, falling cache hit rate |
 | KV publish from the actor fails | The incident is still recorded, and the actor's alarm retries the publish | `publish_retry` log line, canary area check |
 | Actor call fails at call setup | No repeat-caller flag, and the call continues normally | `actor_error` field in the `dv` log |
+| `Session.create` fails at call setup | The variables still carry the greeting and the outage notice, but the MCP tools answer 401 for that call. The prompts admit missing tools and offer a person | `session_error` or `session_timeout` in the `dv` log reasons |
 | Transfer fails | The Take message node records a callback request | Transfer tool status in the transcript |
 
 ## Observability

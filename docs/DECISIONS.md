@@ -50,7 +50,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 **Decision.** The actor publishes `area/<postcode>/status` to KV whenever the status changes. Call setup reads KV only. Publishing uses an outbox. The pending status is saved in actor storage in the same turn as the decision, the KV write follows, and the actor's alarm retries until it succeeds.
 
-**Consequences.** Reads fan out from KV. The announcement can be up to a second or two stale, which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV. A KV write that timed out has an unknown outcome (ADR-015) and may still land after a newer one, so after any timed-out publish the actor writes the then-current status again once at least 30 seconds have passed, longer than an actor method's budget. Only that confirming write clears the marker, so a late write cannot leave KV stale for longer than that.
+**Consequences.** Reads fan out from KV. The announcement can be a second or two stale, plus up to 10 seconds in a warm container's memory cache (ADR-019), which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV. A KV write that timed out has an unknown outcome (ADR-015) and may still land after a newer one, so after any timed-out publish the actor writes the then-current status again once at least 30 seconds have passed, longer than an actor method's budget. Only that confirming write clears the marker, so a late write cannot leave KV stale for longer than that.
 
 ## ADR-006. CustomerAccount actor for limits, history and tickets
 
@@ -64,7 +64,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-007. Sessions, caches and flags live in KV
 
-**Status.** Accepted
+**Status.** Accepted. On 10 October ADR-019 moved sessions to an actor and put memory caches in front of the KV reads.
 
 **Context.** A call is one sequential conversation, so its session has a single writer. CRM lookups are re-queryable data. Flags must change without a redeploy.
 
@@ -90,7 +90,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 **Context.** Containers recycle and scale to zero, any request can land on any container, and requests are capped at 30 seconds. Long-lived SSE streams and in-memory MCP sessions do not fit.
 
-**Decision.** Every MCP request is a self-contained POST answered with a JSON response. Session state lives in KV and actors. The server is built on the official SDK (`@modelcontextprotocol/sdk` 1.32.1): its `WebStandardStreamableHTTPServerTransport` speaks fetch `Request`/`Response` directly, so it runs inside the edge fetch handler unmodified, in stateless mode (no session id generator, so no `Mcp-Session-Id`) with `enableJsonResponse`. Each POST builds a fresh server and transport pair, because the SDK refuses to reuse a stateless transport across requests. The one override is protocol negotiation: the SDK also echoes the 2024-* versions and falls back to its latest, so a small `setRequestHandler` replacement pins the supported set to `2025-11-25` / `2025-06-18` / `2025-03-26` with `2025-06-18` as the fallback. Strict routing stays ours: only `POST /mcp` reaches the SDK, `GET /mcp` gets a 405 and every other path a 404 before any dispatch.
+**Decision.** Every MCP request is a self-contained POST answered with a JSON response. Session state lives in the `Session` actor (ADR-019). The server is built on the official SDK (`@modelcontextprotocol/sdk` 1.32.1): its `WebStandardStreamableHTTPServerTransport` speaks fetch `Request`/`Response` directly, so it runs inside the edge fetch handler unmodified, in stateless mode (no session id generator, so no `Mcp-Session-Id`) with `enableJsonResponse`. Each POST builds a fresh server and transport pair, because the SDK refuses to reuse a stateless transport across requests. The one override is protocol negotiation: the SDK also echoes the 2024-* versions and falls back to its latest, so a small `setRequestHandler` replacement pins the supported set to `2025-11-25` / `2025-06-18` / `2025-03-26` with `2025-06-18` as the fallback. Strict routing stays ours: only `POST /mcp` reaches the SDK, `GET /mcp` gets a 405 and every other path a 404 before any dispatch.
 
 **Consequences.** No sticky sessions, nothing to lose on a restart, and MCP Inspector can test every request in isolation. The JSON-RPC framing, batching, parse errors and header validation come from the SDK instead of hand-rolled code. The SDK's own client opens a `GET /mcp` stream after `initialize` and tolerates our 405, but whether Telnyx's MCP client does is unproven until the spike ships (card S3 steps 3-4); if Telnyx requires the GET, the 405 answer moves from our router into an SDK-shaped JSON-RPC error. The SDK also answers 406 to a POST whose `Accept` header lacks `text/event-stream`, so the `Accept` header Telnyx sends decides whether the SDK can stay. If Telnyx's client fails either check, the hand-rolled subset named above is the fallback.
 
@@ -189,3 +189,15 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 - GLM-5.3 reviews, because its finished reviews were the most precise. It does not write code, because as implementer in the bake-off it stopped at its output cap of 8,192 tokens before writing anything. The agent files now raise that cap to 16,384 (DEBUGLOG issue 7), and `tools/card.sh` fails a step that still reaches it, with one rerun for a cut-off review.
 
 **Consequences.** The model choice is backed by measurements, and the record of who wrote what can be checked commit by commit. Without a separate tester, the code and its tests come from one model, so their mistakes can line up. Two reviews of every diff, GLM-5.3's and Claude Code's, check the tests against the card to make up for it. The loop does not depend on Claude Code. Thiago can run `tools/card.sh` and review by hand with the same evidence, which is also the fallback if a Telnyx-only workflow is preferred. The orchestrator is a cost outside Telnyx, Thiago's subscription, and `DOGFOODING.md` names it next to the inference spend.
+
+## ADR-019. Sessions live in an actor, and hot KV reads go through memory caches
+
+**Status.** Accepted, 10 October, after spike S1.
+
+**Evidence.** DEBUGLOG issue 11 and the S1 measurements. From inside a function a KV read takes about 0.8 s and a write about 1.4 s. An actor round trip takes 141 ms warm and about 280 ms after a pause.
+
+**Context.** Every call setup writes a session and every MCP tool call reads it. In KV that costs each call setup a 1.4 to 1.8 s write and each MCP call a 0.8 s read. The runtime has no `waitUntil`, so a write cannot finish after the response, and the call setup webhook has 4,000 ms in all. Call setup also reads the flags, the CRM cache and the area status from KV, at about 0.8 s each.
+
+**Decision.** One `Session` actor per call, with the sid as its instance name. `voice-tools` ships the class, and `voice-context` reaches it through a shared actor binding, as with `CustomerAccount`. The actor keeps the session document (ARCHITECTURE, Actors) and creates it idempotently per sid (ADR-015). It returns null once the session has expired, marks the disclosure, sets the verified identity, and counts verification failures for account numbers that do not exist, locking verification in that session for 15 minutes after three. Its alarm deletes the state when the session expires, two hours after creation. In front of the hot KV reads each container keeps a memory cache, 10 seconds for flags and area statuses and 60 seconds for CRM lookup results. The KV CRM cache stays, because the `crm_fail` part of the demo needs it across containers.
+
+**Consequences.** A session costs one actor round trip at call setup and one per MCP call, instead of a KV write and a KV read. One call is one sequential writer, so its instance never queues. Every call leaves a short-lived instance that deletes its own state by alarm. A warm container answers most call setups from memory in about 0.2 s. In exchange, a new area status can take up to 10 seconds longer to reach callers on a warm container, and a flag change up to 10 seconds to apply. KV keeps the CRM cache, the flags, the area status read model, callback requests and the canary results.

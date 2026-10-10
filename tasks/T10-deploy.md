@@ -38,7 +38,16 @@ All three functions live with their secrets, bindings and flags, plus a repeatab
 
 ## Ship order
 
-Ship `mock-crm` first, then `voice-tools` (it owns the actor types), then `voice-context` (it references `CustomerAccount`). Time each one with `time telnyx-edge ship` and add the times to `DEBUGLOG.md`. If the CLI gives up, check `telnyx-edge list` and `telnyx-edge ship status <name>` before shipping again.
+Ship `mock-crm` first, then `voice-tools` (it owns the actor types), then `voice-context` (it references `CustomerAccount` and `Session`). Time each one with `time telnyx-edge ship` and add the times to `DEBUGLOG.md`. If the CLI gives up, check `telnyx-edge list` and `telnyx-edge ship status <name>` before shipping again.
+
+## Timing (Thiago)
+
+S1 captured no cold start and did not time a call between functions (DEBUGLOG, S1 measurements). A ship gives both.
+
+1. **Cold start.** Right after each ship, send the function its first request, `GET /healthz`, which touches no state. Record the client time from `curl -s -o /dev/null -w '%{time_total}\n' <url>/healthz` and the server-side duration from `telnyx-edge logs <name> --type invocations`. Then send five more for the warm numbers.
+2. **voice-context's calls.** After the voice-context ship, call `GET /internal/health` with the internal key ten times. Its answer holds `latency_ms` for the KV put and get, the CRM lookup and the two actor calls, as seen from inside voice-context. The first call also includes whatever is still cold.
+
+Record both next to S1's numbers in `DEBUGLOG.md`, with the times of day, and say whether any number moves the budget in `docs/ARCHITECTURE.md` (Call setup latency budget).
 
 ## `scripts/smoke.sh` (agent)
 
@@ -52,12 +61,13 @@ The script reads the function URLs from `infra/ids.json` and the internal key fr
 | voice-context `POST /dv` without a signature | 403 |
 | voice-tools `POST /mcp` without a token | 401 |
 | voice-tools `POST /internal/sessions`, then `initialize` and `tools/list` with the token | five tools |
-| voice-context `GET /internal/health` with the key | 200 with latencies |
+| voice-context `GET /internal/health` with the key | 200, and the script prints each check's `latency_ms` |
 
 ## Acceptance
 
 - [ ] `scripts/smoke.sh` passes against the deployed functions.
-- [ ] `telnyx-edge inspect voice-context` shows the `CustomerAccount` actor binding.
+- [ ] `telnyx-edge inspect voice-context` shows the `CustomerAccount` and `Session` actor bindings.
 - [ ] Ship times are recorded in `DEBUGLOG.md`.
+- [ ] The first request after each ship and voice-context's calls to KV, mock-crm and the actors are timed and recorded next to S1's numbers.
 - [ ] `infra/ids.json` is complete.
 - [ ] MCP Inspector against the deployed `/mcp`, with a token from `POST /internal/sessions` for a fixture account, lists the five tools and calls `verify_account` with the right postcode. `telnyx-edge logs voice-tools` then shows the actor's log line carrying that session's trace id, `internal-<sid>`.

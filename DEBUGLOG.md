@@ -266,6 +266,40 @@ test/area-incident.test.ts(1089,1): error TS1005: '}' expected.
 
 **Design impact.** None. `CLAUDE.md` already stops on 10039, and `card.sh` printed the stop message. An interrupted run is recorded but does not count as a failed attempt.
 
+## 11. KV calls from a function take about a second
+
+**Date** 10 Oct 2026 · **Area** Edge Compute, KV
+
+**Symptom.** S1's timing route took about 2.2 s per request, warm. One KV write and one KV read took almost all of it, where the latency budget had assumed 50 ms for a KV read.
+
+**Evidence.** Twenty warm samples, timed with `performance.now()` inside the function (S1 measurements below, data in `~/code/scratch/smoke`).
+
+```text
+KV put       1,146 / 1,355 / 1,496 ms   min / median / max, and 1,757 ms 13 s after the series
+KV get         668 /   806 /   941 ms
+actor call     134 /   141 /   160 ms   and 269 to 284 ms after a pause
+```
+
+The runtime's source shows that every KV call is an HTTP request to the KV REST API, through a local endpoint where a proxy replaces the placeholder credential. Actor calls go to the actor sidecar on the same host instead.
+
+```text
+# node_modules/@telnyx/edge-runtime 0.16.0, dist/build-env.js
+const PLACEHOLDER_API_KEY = "auth-proxy-will-replace-this";
+env[e.binding] = new KvNamespaceImpl(namespaceId, telnyxBaseUrl, PLACEHOLDER_API_KEY);
+# dist/kv-namespace.js, every get, put, delete and list
+return `${this.baseUrl.replace(/\/+$/, "")}/storage/kvs/${encodeURIComponent(this.namespaceId)}/keys`;
+resp = await fetch(url, { method: "GET", headers: { ...this.authHeader() } });
+# dist/runtime-endpoints.js
+const DEFAULT_TELNYX_BASE_URL = "http://localhost:3601";
+actorUrlRoot: `http://${host}:${port}`,      // DAPR_HOST and DAPR_HTTP_PORT, default 127.0.0.1:3500
+```
+
+**Cause.** A property of the platform, not a bug in our code. KV from inside a function is a REST call, and S1 measured it at about 0.8 s per read and 1.4 s per write. We cannot see how that time splits between the proxy and the KV service.
+
+**Fix.** Nothing to fix on our side, so the design works around it.
+
+**Design impact.** ADR-019 moves sessions from KV to a `Session` actor (card T18) and puts memory caches in front of the hot KV reads, 10 seconds for flags and area statuses and 60 seconds for CRM results. The call setup webhook timeout is 4,000 ms, and `docs/ARCHITECTURE.md` (Call setup latency budget) has the new timeouts and expected times. T08 and T09 follow them, and T10 times the first request after each ship and the call from voice-context to mock-crm.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
@@ -291,7 +325,7 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 
 **KV calls dominate.** From inside a function a KV read takes about 0.8 s and a write about 1.4 s, warm, where the latency budget in `docs/ARCHITECTURE.md` assumed 50 ms for a read. The actor round trip is about 140 ms warm and 270 to 290 ms after even a short pause, as on 9 Oct.
 
-**Proposed `dynamic_variables_webhook_timeout_ms`, 4,000 ms, pending Thiago.** The card's rule takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. On the current T08 design the slowest call setup is a CRM cache miss after a pause. Its flags read (0.9 s), CRM cache read (0.9 s) and mock-crm call (about 1.2 s, an estimate, because S1 did not measure a call between functions) run one after another, followed by the slowest of the parallel steps, the 1.8 s session write. That is about 4.8 s, which times 1.5 is 7.3 s, so the 4,000 ms cap applies, and T08's budgets have to change to fit under it.
+**`dynamic_variables_webhook_timeout_ms` is 4,000 ms, approved by Thiago on 10 October.** The card's rule takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. On the current T08 design the slowest call setup is a CRM cache miss after a pause. Its flags read (0.9 s), CRM cache read (0.9 s) and mock-crm call (about 1.2 s, an estimate, because S1 did not measure a call between functions) run one after another, followed by the slowest of the parallel steps, the 1.8 s session write. That is about 4.8 s, which times 1.5 is 7.3 s, so the 4,000 ms cap applies, and T08's budgets have to change to fit under it. They did, in ADR-019 and the budget in `docs/ARCHITECTURE.md`.
 
 ## S3 findings
 
