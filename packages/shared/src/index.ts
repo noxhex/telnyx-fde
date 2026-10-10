@@ -4,6 +4,15 @@ export type { Fields, Level, Logger } from "./log.js";
 export { maskAccount, maskPhone } from "./mask.js";
 export { mintSessionToken, verifySessionToken } from "./session-token.js";
 export type { SessionClaims, TokenCheck } from "./session-token.js";
+export type {
+  CreateSessionInput,
+  CreateSessionResult,
+  DisclosureResult,
+  IdentityLevel,
+  SessionDoc,
+  SetVerifiedResult,
+  VerifyFailureResult,
+} from "./session-types.js";
 export { decryptForTests, encryptForTelnyx, parseKey } from "./telnyx-encrypt.js";
 export { verifyTelnyxSignature } from "./telnyx-signature.js";
 export type { SignatureCheck } from "./telnyx-signature.js";

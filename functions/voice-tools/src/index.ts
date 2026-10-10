@@ -3,6 +3,7 @@
 // type in telnyx.toml.
 export { AreaIncident } from "./actors/area-incident.js";
 export { CustomerAccount } from "./actors/customer-account.js";
+export { Session } from "./actors/session.js";
 
 import type { Env } from "@telnyx/edge-runtime";
 

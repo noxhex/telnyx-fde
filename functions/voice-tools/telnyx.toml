@@ -10,6 +10,10 @@ type = "CustomerAccount"
 binding = "AREA_INCIDENT"
 type = "AreaIncident"
 
+[[actors]]
+binding = "SESSION"
+type = "Session"
+
 # The duinvezel namespace (infra/ids.json), created by hand; AreaIncident
 # publishes the `area/<postcode>/status` read model here.
 [storage.kv.KV]

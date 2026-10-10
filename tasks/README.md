@@ -65,7 +65,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T05 | mock-crm function | T02 | done |
 | T06 | CustomerAccount domain and actor | T02 | done |
 | T07 | AreaIncident domain and actor | T02 | done |
-| T18 | Session domain and actor | T02 | todo |
+| T18 | Session domain and actor | T02 | done |
 | T08 | voice-context function | T03, T04, T05, T06, T18, S1 | todo |
 | T09 | voice-tools MCP server | T04, T06, T07, T08, T18, S3 | todo |
 | T10 | Deploy and smoke-test all three functions | T08, T09 | todo |
