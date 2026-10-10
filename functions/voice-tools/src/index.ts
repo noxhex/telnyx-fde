@@ -1,6 +1,7 @@
-// Re-export the actor class from the entry point so it is bundled and
-// shipped with the function; the exported name must equal the [[actors]]
+// Re-export the actor classes from the entry point so they are bundled and
+// shipped with the function; each exported name must equal its [[actors]]
 // type in telnyx.toml.
+export { AreaIncident } from "./actors/area-incident.js";
 export { CustomerAccount } from "./actors/customer-account.js";
 
 import type { Env } from "@telnyx/edge-runtime";
