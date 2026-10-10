@@ -84,15 +84,15 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-009. Stateless MCP over Streamable HTTP
 
-**Status.** Accepted (spike S3)
+**Status.** Pending (spike S3). The SDK runs in the edge runtime, and Telnyx's own client is still to be tested.
 
-**Evidence.** DEBUGLOG S3 findings.
+**Evidence.** DEBUGLOG S3 findings, local part.
 
 **Context.** Containers recycle and scale to zero, any request can land on any container, and requests are capped at 30 seconds. Long-lived SSE streams and in-memory MCP sessions do not fit.
 
 **Decision.** Every MCP request is a self-contained POST answered with a JSON response. Session state lives in KV and actors. The server is built on the official SDK (`@modelcontextprotocol/sdk` 1.32.1): its `WebStandardStreamableHTTPServerTransport` speaks fetch `Request`/`Response` directly, so it runs inside the edge fetch handler unmodified, in stateless mode (no session id generator, so no `Mcp-Session-Id`) with `enableJsonResponse`. Each POST builds a fresh server and transport pair, because the SDK refuses to reuse a stateless transport across requests. The one override is protocol negotiation: the SDK also echoes the 2024-* versions and falls back to its latest, so a small `setRequestHandler` replacement pins the supported set to `2025-11-25` / `2025-06-18` / `2025-03-26` with `2025-06-18` as the fallback. Strict routing stays ours: only `POST /mcp` reaches the SDK, `GET /mcp` gets a 405 and every other path a 404 before any dispatch.
 
-**Consequences.** No sticky sessions, nothing to lose on a restart, and MCP Inspector can test every request in isolation. The JSON-RPC framing, batching, parse errors and header validation come from the SDK instead of hand-rolled code. The SDK's own client opens a `GET /mcp` stream after `initialize` and tolerates our 405, but whether Telnyx's MCP client does is unproven until the spike ships (card S3 steps 3-4); if Telnyx requires the GET, the 405 answer moves from our router into an SDK-shaped JSON-RPC error.
+**Consequences.** No sticky sessions, nothing to lose on a restart, and MCP Inspector can test every request in isolation. The JSON-RPC framing, batching, parse errors and header validation come from the SDK instead of hand-rolled code. The SDK's own client opens a `GET /mcp` stream after `initialize` and tolerates our 405, but whether Telnyx's MCP client does is unproven until the spike ships (card S3 steps 3-4); if Telnyx requires the GET, the 405 answer moves from our router into an SDK-shaped JSON-RPC error. The SDK also answers 406 to a POST whose `Accept` header lacks `text/event-stream`, so the `Accept` header Telnyx sends decides whether the SDK can stay. If Telnyx's client fails either check, the hand-rolled subset named above is the fallback.
 
 ## ADR-010. Route on a tool node right after the disclosure
 
