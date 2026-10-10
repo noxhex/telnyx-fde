@@ -57,7 +57,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | S1 | Latency and cold start | none | done |
 | S2 | Workflow routing on a tool node | none | todo |
 | S3 | MCP transport in the edge runtime | none | done |
-| S4 | Per-call token round trip | S2, S3 | todo |
+| S4 | Per-call token round trip | S2, S3 | code done, ship pending |
 | T01 | Repo scaffold and workspace bundling | none | done |
 | T02 | Logging, timing and test fakes | T01 | done |
 | T03 | Telnyx webhook signature verifier (bake-off) | T01 | done |
