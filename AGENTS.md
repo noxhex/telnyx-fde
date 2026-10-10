@@ -81,6 +81,11 @@ docs/  tasks/
 - Unit-test every domain function, including the failure and edge cases the card lists.
 - Use the fakes in `packages/shared/test/fakes/` for KV, actor storage and the clock. Do not call real Telnyx services from tests.
 - Tests must be deterministic. Inject time and randomness.
+- Test every limit at its boundary, with one value exactly at the limit and one just past it.
+- Test every optional parameter twice, once omitted so the default applies and once set to a value other than the default.
+- Use the real types the card names, such as the binding types in `@telnyx/edge-runtime`, and never invent an interface the card does not define.
+- Model async work with promises the test holds pending and settles by hand, never with real time or sleeps.
+- For each timeout, add a test where the held call settles after the timeout has fired, so a late result is covered.
 
 ## Commands
 
