@@ -187,7 +187,7 @@ DeepSeek-V4-Flash-0731   16384                          stop      14250         
 
 **Design impact.** `CLAUDE.md`, where a cut-off review gets one rerun with `--review-only` and a second cut-off on the same card goes to Thiago. The three agent files, which set `max_tokens`. GLM-5.3 stays the reviewer and does not write code (ADR-018).
 
-**Again at the higher cap, 10 Oct 2026.** Reviewing T07, a 1,351-line diff, GLM-5.3 spent its last step on 16,386 tokens of reasoning and wrote no text, so the 16,384 cap can still be reached. This time `tools/card.sh` failed the run as `cutoff:reviewer` with exit 4, and the one `--review-only` rerun finished and approved. The fix works as intended. Bigger diffs make a cut-off more likely.
+**Again at the higher cap, 10 Oct 2026.** Reviewing T07, a 1,351-line diff, GLM-5.3 spent its last step on 16,386 tokens of reasoning and wrote no text, so the 16,384 cap can still be reached. This time `tools/card.sh` failed the run as `cutoff:reviewer` with exit 4, and the one `--review-only` rerun finished and approved. The fix works as intended. Bigger diffs make a cut-off more likely. The T07 follow-up's review was cut off the same way, the second time on that card, and Thiago accepted the follow-up on Claude Code's review.
 
 ## 8. A flaky timing test hid a measurement bug
 
@@ -243,6 +243,28 @@ resp = await fetch(url, { method: "POST", ... });
 **Fix.** Nothing to fix in our code. `mock-crm` fails closed, so a secret it cannot read means 401. The keyed routes are covered by request-level tests, and they get checked on the deployed function in T10.
 
 **Design impact.** No dev-only override, because an override would be an auth bypass that could ship, and the demo and the scripts only ever call deployed functions. Under `telnyx-edge dev` the cards check routing, the fail-closed answers and the actor bindings. Keyed behaviour is proven by the request-level tests and on the deployed functions in T10 (Thiago, 10 Oct).
+
+## 10. A spend limit stopped an agent run mid-edit
+
+**Date** 10 Oct 2026 · **Area** Telnyx Inference, run harness
+
+**Symptom.** The T07 follow-up stopped after six minutes, and the implementer's half-rewritten test file no longer compiled.
+
+**Evidence.**
+
+```text
+error: Forbidden: {"errors":[{"code":"10039","title":"Inference spend limit reached",
+  "detail":"Inference is paused for this account because its daily inference spend limit was reached.
+  It resumes no later than 2026-10-11T00:00:00Z."}]}
+$ npm run check
+test/area-incident.test.ts(1089,1): error TS1005: '}' expected.
+```
+
+**Cause.** The account's daily inference spend limit was reached in the middle of the implementer's run.
+
+**Fix.** Thiago removed the daily cap in the portal. `tools/card.sh --retry` continued the same OpenCode session, with feedback that named the interruption and the broken line and repeated the earlier points, in case the session was gone. The implementer closed the open block and finished the card in 2m19s.
+
+**Design impact.** None. `CLAUDE.md` already stops on 10039, and `card.sh` printed the stop message. An interrupted run is recorded but does not count as a failed attempt.
 
 ## S1 measurements
 

@@ -4,10 +4,14 @@ import type { KvNamespace } from "@telnyx/edge-runtime";
 
 import {
   AreaIncident,
+  CONFIRM_AFTER_MS,
   formatEtaBrussels,
   KV_PUBLISH_TIMEOUT_MS,
 } from "../src/actors/area-incident.js";
-import type { AreaReportInput } from "../src/actors/area-incident.js";
+import type {
+  AreaIncidentMeta,
+  AreaReportInput,
+} from "../src/actors/area-incident.js";
 import {
   currentStatus,
   initialState,
@@ -132,12 +136,25 @@ describe("report counting and dedupe", () => {
 // ---------- report: the window ----------
 
 describe("report window", () => {
-  it("drops a report exactly windowMs old", () => {
+  it("a report exactly windowMs old still counts", () => {
     let s = initialState("8630");
     s = report(s, reportInput({ accountId: "DV-100001", nowMs: T0 })).state;
     const { state, result } = report(
       s,
-      reportInput({ accountId: "DV-100002", nowMs: T0 + WINDOW_MS }),
+      reportInput({ accountId: "DV-100002", nowMs: T0 + WINDOW_MS, threshold: 2 }),
+    );
+    expect(result.reportsInWindow).toBe(2);
+    expect(Object.keys(state.reports).sort()).toEqual(["DV-100001", "DV-100002"]);
+    // Threshold 2 reached by the still-counting report: it declares.
+    expect(result.incidentDeclared).toBe(true);
+  });
+
+  it("drops a report one millisecond past the window", () => {
+    let s = initialState("8630");
+    s = report(s, reportInput({ accountId: "DV-100001", nowMs: T0 })).state;
+    const { state, result } = report(
+      s,
+      reportInput({ accountId: "DV-100002", nowMs: T0 + WINDOW_MS + 1 }),
     );
     expect(result.reportsInWindow).toBe(1);
     expect(Object.keys(state.reports)).toEqual(["DV-100002"]);
@@ -157,7 +174,7 @@ describe("report window", () => {
     // Both earlier reports have left the window; this third one stands alone.
     const { state, result } = report(
       s,
-      reportInput({ accountId: "DV-100003", nowMs: T0 + WINDOW_MS, threshold: 3 }),
+      reportInput({ accountId: "DV-100003", nowMs: T0 + WINDOW_MS + 1, threshold: 3 }),
     );
     expect(result.reportsInWindow).toBe(1);
     expect(result.incidentDeclared).toBe(false);
@@ -381,11 +398,11 @@ describe("currentStatus", () => {
 // ---------- pruneReports ----------
 
 describe("pruneReports", () => {
-  it("drops reports older than the window and keeps fresh ones", () => {
+  it("drops a report 1 ms past the window and keeps one exactly at it", () => {
     let s = initialState("8630");
     s = report(s, reportInput({ accountId: "DV-100001", nowMs: T0 })).state;
-    s = report(s, reportInput({ accountId: "DV-100002", nowMs: T0 + WINDOW_MS - 1 })).state;
-    const pruned = pruneReports(s, { nowMs: T0 + WINDOW_MS, windowMs: WINDOW_MS });
+    s = report(s, reportInput({ accountId: "DV-100002", nowMs: T0 + 1 })).state;
+    const pruned = pruneReports(s, { nowMs: T0 + WINDOW_MS + 1, windowMs: WINDOW_MS });
     expect(Object.keys(pruned.reports)).toEqual(["DV-100002"]);
   });
 
@@ -582,14 +599,33 @@ describe("AreaIncident actor adapter", () => {
     return s as AreaIncidentState;
   }
 
+  async function storedMeta(storage: ActorStorageFake): Promise<AreaIncidentMeta> {
+    const meta = await storage.get<AreaIncidentMeta>("meta");
+    expect(meta).toBeDefined();
+    return meta as AreaIncidentMeta;
+  }
+
+  let logLines: Record<string, unknown>[];
+
   beforeEach(() => {
     vi.useFakeTimers({ now: T0 });
+    logLines = [];
+    // The adapter's logger writes to stdout; capture every line as JSON.
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      logLines.push(JSON.parse(String(chunk)) as Record<string, unknown>);
+      return true;
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  /** The captured log lines for one event. */
+  function logged(event: string): Record<string, unknown>[] {
+    return logLines.filter((line) => line.event === event);
+  }
 
   it("records a report, sets areaCode from the instance name, touches no KV", async () => {
     const clock = createClockFake(T0);
@@ -638,7 +674,6 @@ describe("AreaIncident actor adapter", () => {
   it("keeps the result and the decision when the publish fails, and arms the alarm", async () => {
     const { kv, fail } = switchableKv();
     fail(new Error("kv_down"));
-    const logSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     const result = await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
@@ -647,20 +682,21 @@ describe("AreaIncident actor adapter", () => {
     const s = await storedState(storage);
     expect(s.outbox?.state).toBe("outage");
     expect(await storage.getAlarm()).toBe(T0 + 5_000);
-    expect(await storage.get("meta")).toEqual({
+    expect(await storedMeta(storage)).toEqual({
       windowMs: WINDOW_MS,
       publishFailures: 1,
+      changeTraceId: null,
+      confirmDueAtMs: null,
+      lastStatus: s.outbox,
     });
-    const lines = logSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(lines).toContain('"event":"publish_retry"');
-    expect(lines).toContain('"area":"8630"');
-    expect(lines).toContain("kv_down");
+    const retries = logged("publish_retry");
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({ area: "8630", version: 1, error: "kv_down" });
   });
 
   it("treats a hanging KV as a failed publish after 300 ms", async () => {
     const { kv, hang } = switchableKv();
     hang();
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true); // swallow publish_retry
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     const pending = actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
@@ -669,12 +705,19 @@ describe("AreaIncident actor adapter", () => {
     expect(result.incidentDeclared).toBe(true);
     expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
     expect((await storedState(storage)).outbox?.state).toBe("outage");
+    // A timed-out publish has an unknown outcome: a confirming write is due.
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(
+      T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS,
+    );
+    expect(logged("publish_retry")[0]).toMatchObject({
+      error: "kv_publish_timeout",
+      latency_ms: KV_PUBLISH_TIMEOUT_MS,
+    });
   });
 
   it("retries with 5 s, 15 s, then 60 s backoff until the publish lands", async () => {
     const { kv, fail, ok } = switchableKv();
     fail(new Error("kv_down"));
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true); // swallow publish_retry
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001" }));
     await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
@@ -719,13 +762,16 @@ describe("AreaIncident actor adapter", () => {
     expect(storage.calls.filter((c) => c.method === "setAlarm")).toEqual([]);
   });
 
-  it("the alarm prunes reports older than the last reported window", async () => {
+  it("the alarm prunes reports strictly older than the last reported window", async () => {
     const clock = createClockFake(T0);
     const kv = createKvFake(clock.now);
     const { actor, storage } = makeActor(kv);
     await actor.report(actorReport({ accountId: "DV-100001", nowMs: T0 }));
-    // Move past the window and run the alarm: the lone report is pruned.
+    // At exactly windowMs the report still counts; 1 ms later it is pruned.
     vi.setSystemTime(T0 + WINDOW_MS);
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(Object.keys((await storedState(storage)).reports)).toEqual(["DV-100001"]);
+    vi.setSystemTime(T0 + WINDOW_MS + 1);
     await actor.alarm({ retryCount: 0, isRetry: false });
     expect((await storedState(storage)).reports).toEqual({});
     // Running it again is a no-op.
@@ -788,5 +834,259 @@ describe("AreaIncident actor adapter", () => {
     expect(result).toEqual({ resolved: false, incidentId: null });
     expect(storage.calls.filter((c) => c.method === "put")).toEqual([]);
     expect(kv.calls).toEqual([]);
+  });
+
+  // ---------- actor call logging ----------
+
+  it("report writes one actor line per call with the masked account and outcome", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-1" }));
+    await actor.report(actorReport({ accountId: "DV-100001", nowMs: T0 + 1, traceId: "trace-1" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 2, traceId: "trace-1" }));
+    const lines = logged("actor");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatchObject({
+      svc: "voice-tools",
+      level: "info",
+      actor: "AreaIncident",
+      method: "report",
+      trace_id: "trace-1",
+      area: "8630",
+      account: "DV-…001",
+      outcome: "counted",
+      latency_ms: 0,
+    });
+    expect(lines[1].outcome).toBe("duplicate");
+    expect(lines[2].outcome).toBe("declared");
+    // No unmasked account number anywhere in the log.
+    expect(JSON.stringify(logLines)).not.toContain("DV-100001");
+  });
+
+  it("report without a trace id logs trace_id null", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.report(actorReport());
+    expect(logged("actor")[0]).toMatchObject({ trace_id: null, outcome: "counted" });
+  });
+
+  it("resolve writes resolved and unchanged actor lines, without an account", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.resolve({ nowMs: T0, traceId: "trace-9" });
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-9" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-9" }));
+    vi.setSystemTime(T0 + HOUR_MS);
+    await actor.resolve({ nowMs: T0 + HOUR_MS, traceId: "trace-9" });
+    const lines = logged("actor").filter((line) => line.method === "resolve");
+    expect(lines.map((line) => line.outcome)).toEqual(["unchanged", "resolved"]);
+    expect(lines[0]).toMatchObject({ method: "resolve", trace_id: "trace-9", area: "8630", latency_ms: 0 });
+    expect(lines[1].latency_ms).toBe(0);
+    expect("account" in lines[0]).toBe(false);
+  });
+
+  it("a throwing report logs outcome error and rethrows", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await expect(actor.report(actorReport({ nowMs: NaN, traceId: "trace-7" }))).rejects.toThrow(
+      RangeError,
+    );
+    const lines = logged("actor");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: "error",
+      method: "report",
+      outcome: "error",
+      trace_id: "trace-7",
+    });
+    expect(String(lines[0].error)).toContain("nowMs");
+  });
+
+  it("a throwing resolve logs outcome error and rethrows", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await expect(actor.resolve({ nowMs: Infinity, traceId: "trace-8" })).rejects.toThrow(
+      RangeError,
+    );
+    expect(logged("actor")[0]).toMatchObject({
+      level: "error",
+      method: "resolve",
+      outcome: "error",
+      trace_id: "trace-8",
+    });
+  });
+
+  // ---------- publish logging and trace id ----------
+
+  it("publish and publish_retry carry the trace id of the change that set the outbox", async () => {
+    const { kv, fail, ok } = switchableKv();
+    const { actor } = makeActor(kv);
+    ok();
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-plain" }));
+    fail(new Error("kv_down"));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-declare" }));
+    // The declaring change's publish failed: publish_retry carries its trace id.
+    expect(logged("publish_retry")).toHaveLength(1);
+    expect(logged("publish_retry")[0]).toMatchObject({
+      area: "8630",
+      version: 1,
+      trace_id: "trace-declare",
+      latency_ms: 0,
+    });
+    // The alarm's failed retries carry the same trace id.
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(logged("publish_retry")).toHaveLength(2);
+    expect(logged("publish_retry")[1]).toMatchObject({ version: 1, trace_id: "trace-declare" });
+    // And so does the eventual publish from the alarm.
+    ok();
+    vi.setSystemTime(T0 + 15_000);
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(logged("publish")).toHaveLength(1);
+    expect(logged("publish")[0]).toMatchObject({
+      area: "8630",
+      version: 1,
+      trace_id: "trace-declare",
+      latency_ms: 0,
+    });
+  });
+
+  it("a successful inline publish logs publish at once", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-1" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-1" }));
+    expect(logged("publish")).toHaveLength(1);
+    expect(logged("publish")[0]).toMatchObject({ version: 1, trace_id: "trace-1" });
+    expect(logged("publish_retry")).toEqual([]);
+  });
+
+  // ---------- the retry ladder does not restart ----------
+
+  it("repeated failed inline publishes climb the ladder instead of restarting it", async () => {
+    const { kv, fail } = switchableKv();
+    fail(new Error("kv_down"));
+    const { actor, storage } = makeActor(kv);
+    // v1 declares and its publish fails: the ladder starts at 5 s.
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "t1" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "t1" }));
+    expect(await storage.getAlarm()).toBe(T0 + 5_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(1);
+    // The resolve's publish fails next: up the ladder to 15 s, not back to 5.
+    await actor.resolve({ nowMs: T0 + 2_000, traceId: "t2" });
+    expect(await storage.getAlarm()).toBe(T0 + 15_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(2);
+    // A plain report finds the v2 outbox still pending and retries it: 60 s.
+    await actor.report(actorReport({ accountId: "DV-100001", nowMs: T0 + 3_000, traceId: "t3" }));
+    expect(await storage.getAlarm()).toBe(T0 + 60_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(3);
+    // A new declaration replaces the outbox and fails again: still 60 s.
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 3_001, traceId: "t3" }));
+    expect(await storage.getAlarm()).toBe(T0 + 60_000);
+    expect((await storedMeta(storage)).publishFailures).toBe(4);
+    expect(logged("publish_retry")).toHaveLength(4);
+  });
+
+  // ---------- confirming write ----------
+
+  it("a late timed-out publish is corrected by the confirming write", async () => {
+    let releaseHeld!: () => void;
+    const gate = new Promise<void>((resolveGate) => {
+      releaseHeld = resolveGate;
+    });
+    let holding = true;
+    const landed: AreaStatus[] = [];
+    // Models KV honestly: a put lands when its promise settles, not when it
+    // is called, so the held write can arrive late.
+    const kv = {
+      put: (_key: string, value: string) => {
+        if (holding) {
+          return gate.then(() => {
+            landed.push(JSON.parse(value) as AreaStatus);
+          });
+        }
+        landed.push(JSON.parse(value) as AreaStatus);
+        return Promise.resolve();
+      },
+    } as unknown as KvNamespace;
+    const { actor, storage } = makeActor(kv);
+
+    // v1 declares; its publish is held until after the timeout.
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-v1" }));
+    const declaring = actor.report(
+      actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }),
+    );
+    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
+    expect((await declaring).incidentDeclared).toBe(true);
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(
+      T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS,
+    );
+    expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+
+    // v2 (a resolve) publishes fine while the v1 write is still held.
+    holding = false;
+    vi.setSystemTime(T0 + 400);
+    await actor.resolve({ nowMs: T0 + 400, traceId: "trace-v2" });
+    expect(landed.at(-1)).toMatchObject({ state: "ok", version: 2, updatedAt: T0 + 400 });
+    expect((await storedState(storage)).outbox).toBeNull();
+
+    // The alarm fires before the confirming write is due: it just re-arms.
+    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(await storage.getAlarm()).toBe(T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS);
+
+    // The held v1 write finally lands, clobbering v2 with the stale status.
+    releaseHeld();
+    await gate;
+    await Promise.resolve();
+    expect(landed.at(-1)).toMatchObject({ state: "outage", version: 1 });
+
+    // Once 30 s have passed, the alarm's confirming write restores the newest status.
+    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS);
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(landed.at(-1)).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 2,
+      updatedAt: T0 + 400,
+    });
+    expect((await storedMeta(storage)).confirmDueAtMs).toBeNull();
+    expect(logged("publish").at(-1)).toMatchObject({
+      area: "8630",
+      version: 2,
+      trace_id: "trace-v2",
+    });
+  });
+
+  it("a failed confirming write is retried on the ladder and keeps the marker", async () => {
+    const { kv, hang, ok } = switchableKv();
+    hang();
+    const { actor, storage } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-v1" }));
+    const declaring = actor.report(
+      actorReport({ accountId: "DV-100002", nowMs: T0 + 1, traceId: "trace-v1" }),
+    );
+    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
+    await declaring;
+    const dueAt = T0 + KV_PUBLISH_TIMEOUT_MS + CONFIRM_AFTER_MS;
+
+    // The ladder's first alarm publishes the outbox once KV answers again…
+    ok();
+    vi.setSystemTime(T0 + KV_PUBLISH_TIMEOUT_MS + 5_000);
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect((await storedState(storage)).outbox).toBeNull();
+    // …but the timed-out write still owes a confirming write at dueAt.
+    expect(await storage.getAlarm()).toBe(dueAt);
+
+    // When the confirming write times out too, the marker stays and the
+    // ladder arms the next attempt.
+    hang();
+    vi.setSystemTime(dueAt);
+    const confirming = actor.alarm({ retryCount: 0, isRetry: false });
+    await vi.advanceTimersByTimeAsync(KV_PUBLISH_TIMEOUT_MS);
+    await confirming;
+    expect((await storedMeta(storage)).confirmDueAtMs).toBe(dueAt);
+    expect((await storedMeta(storage)).publishFailures).toBe(1);
+    expect(await storage.getAlarm()).toBe(dueAt + KV_PUBLISH_TIMEOUT_MS + 5_000);
   });
 });

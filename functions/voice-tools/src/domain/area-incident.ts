@@ -87,7 +87,7 @@ function requirePositiveInt(fn: string, field: string, value: number): void {
   }
 }
 
-/** Reports younger than the window survive; one exactly `windowMs` old drops out. */
+/** Reports strictly older than the window drop out; one exactly `windowMs` old still counts. */
 function pruneWindow(
   reports: AreaIncidentState["reports"],
   nowMs: number,
@@ -95,7 +95,7 @@ function pruneWindow(
 ): AreaIncidentState["reports"] {
   const fresh: AreaIncidentState["reports"] = {};
   for (const [accountId, r] of Object.entries(reports)) {
-    if (nowMs - r.at < windowMs) {
+    if (nowMs - r.at <= windowMs) {
       fresh[accountId] = r;
     }
   }
@@ -116,7 +116,8 @@ function incidentId(areaCode: string, nowMs: number): string {
 }
 
 /**
- * Record one outage report. Reports older than `windowMs` are dropped first.
+ * Record one outage report. Reports strictly older than `windowMs` are
+ * dropped first, so a report exactly `windowMs` old still counts.
  * A repeat report from the same account refreshes its timestamp and symptom
  * but is not counted again. While the area is `ok`, the report that brings
  * the distinct reporters in the window to `threshold` declares the incident:
