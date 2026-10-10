@@ -74,13 +74,15 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-008. Per-call capability token through encrypted dynamic variables
 
-**Status.** Pending (spike S4)
+**Status.** Accepted, 10 October, after spike S4.
+
+**Evidence.** DEBUGLOG S4 findings and issue 13.
 
 **Context.** The MCP server must know which call, account and area a request belongs to. Passing an account id as a tool argument would let a prompt-injected caller ask for someone else's account.
 
 **Decision.** At call setup `voice-context` mints an HMAC-signed token naming the session, encrypts it with AES-256-GCM under a key shared with Telnyx as an integration secret, and returns it in `encrypted_dynamic_variables.mcp_token`. The MCP server is configured with `api_key_ref: "{{mcp_token | mcp_enc_key}}"`, so Telnyx sends the decrypted token as the bearer token.
 
-**Consequences.** The model never sees the token, and every MCP request carries the trace id. If decryption fails, Telnyx excludes the MCP server for that call instead of connecting unauthenticated, so the prompts must handle missing tools.
+**Consequences.** The model never sees the token, and Telnyx sends it as the bearer token on every MCP request of the conversation, `initialize` and `notifications/initialized` included, so every request carries the trace id. When decryption fails no unauthenticated request is made, as Telnyx's per-caller credentials page says. That page also says the conversation goes on without the server's tools, but in S4 a browser call crashed at the first tool use instead (DEBUGLOG issue 13). So the integration secret and the edge secret are always written together from one value, as T10's steps do, and every key change gets a real test call before the demo.
 
 ## ADR-009. Stateless MCP over Streamable HTTP
 

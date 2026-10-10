@@ -27,7 +27,7 @@ All three functions live with their secrets, bindings and flags, plus a repeatab
    telnyx-edge secrets add DEMO_CALLER_PHONE "$P"; unset P
    ```
 
-   T11 needs `DUINVEZEL_MCP_ENC_KEY` again for the Telnyx integration secret, and the scripts need `DUINVEZEL_INTERNAL_KEY`. Both stay only in `~/.config/telnyx/env`.
+   T11 needs `DUINVEZEL_MCP_ENC_KEY` again for the Telnyx integration secret, and the scripts need `DUINVEZEL_INTERNAL_KEY`. Both stay only in `~/.config/telnyx/env`. The edge secret `MCP_ENC_KEY` and the integration secret must hold the same value, because a mismatch crashes a call at its first tool use (DEBUGLOG issue 13). So both are always written from the one value saved here, and every key change gets a real test call before the demo.
 
 3. **Flags.**
 

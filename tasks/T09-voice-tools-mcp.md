@@ -45,7 +45,7 @@ As proven in S3 and recorded in ADR-009. The server is built on the SDK's `WebSt
 
 Every `POST /mcp` needs `Authorization: Bearer <token>`, checked before the SDK sees the request. Verify the token with `MCP_TOKEN_KEY` (turned into bytes with `parseKey` once per container), then load the session with `SESSION.get` on the token's sid. A missing, invalid or expired token, or a session that is missing or expired, answers HTTP 401 with a JSON-RPC error and a log line `auth_failed` (reason and user agent), before any other state access. A session read or a secret read that fails or times out answers HTTP 503 with a JSON-RPC error, logged with the reason `session_unavailable` or `secret_error`. The per-request server is built with the loaded session, so every tool handler sees only that session.
 
-Before running this card, check the auth rules against S4's result in `DEBUGLOG.md`. S4 shows which requests carry the bearer token, and ADR-008 follows from it.
+S4 showed that Telnyx sends the bearer token on every MCP request of a conversation, `initialize` and `notifications/initialized` included (DEBUGLOG, S4 findings), so no request needs an exception from the token check.
 
 ## Timeouts and caches
 

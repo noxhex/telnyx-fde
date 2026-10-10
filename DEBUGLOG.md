@@ -94,6 +94,8 @@ The request at 11:58:52 is the missing 9. A query at about 11:59:25 did not show
 
 **Design impact.** ADR-014 (strict routing, authentication before state, our own log line with user agent and auth result) and ADR-017 (platform logs lag at least 30 seconds, so detection comes from our own signals).
 
+**A likely source, 10 Oct 2026.** Thirteen seconds after a new version of `mcp-spike` started, at 20:18:08 UTC, a request from `Go-http-client/2.0` hit a path the spike does not serve and got a 404. That looks like a platform probe after a deploy, and may explain the unknown visitor at 11:58:52.
+
 ## 5. A KV namespace create timed out but had succeeded
 
 **Date** 9 Oct 2026 · **Area** Edge Compute, KV
@@ -324,6 +326,20 @@ The shared-actors doc (https://developers.telnyx.com/docs/edge-compute/stateful-
 
 **Design impact.** The three keyless checks the T08 card wanted under dev (`/healthz` 200, an unknown path 404, an unsigned `POST /dv` 403) are covered by `test/routing.test.ts`, which drives the real fetch handler with a dev-like env, and by `scripts/smoke.sh` on the deployed function in T10. T10 ships voice-tools, the owner, before voice-context, because the doc says a reference type resolves only against an owner already on the account.
 
+## 13. A call crashed when its MCP token could not be decrypted
+
+**Date** 10 Oct 2026 · **Area** AI Assistants, per-caller credentials
+
+**Symptom.** In S4's bad path the browser call started normally, then crashed when the caller asked for the echo tool. The phone path was not tested.
+
+**Evidence.** Thiago's test at 20:24:23 UTC. `/dv?mode=bad` logged token id `8F9Bet0RjXCOmnuZ` with mode `bad`, and returned the same shape as the good path with one bit of the encrypted value flipped inside the GCM tag. No request reached `/mcp` afterwards. Telnyx's per-caller credentials page (https://developers.telnyx.com/docs/inference/ai-assistants/per-caller-credentials) describes a different outcome when "decryption fails". It says "No connection is attempted, so none is ever made unauthenticated, and its tools are unavailable for that conversation", and "An assistant whose MCP server drops out of a conversation loses that server's tools for the whole conversation".
+
+**Cause.** Not known. Decryption failed as intended, since no unauthenticated request arrived, but the platform ended the call instead of carrying on without the tools. The crash came when the caller asked for the tool, not at the start of the call.
+
+**Fix.** None on our side. The prompts cannot handle a call that has ended.
+
+**Design impact.** ADR-008 and the Failure modes table in `docs/ARCHITECTURE.md`. A mismatch between the integration secret and the edge secret does not just remove the tools, it ends the call at the first tool use. So both copies of the key are always written together from one value, as T10's steps do, and every key change gets a real test call before the demo.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
@@ -390,7 +406,19 @@ POST 200 51.359882ms   POST 202 10.307329ms   POST 200 9.473758ms   POST 200 15.
 - No `GET /mcp` at all, so the 405 never came into play, and no 406, so Telnyx's `Accept` header satisfies the SDK.
 - Every request was a POST taking 9 to 51 ms on our side.
 
+The S3 ship took about 4 min 30 s.
+
 **MCP Inspector against the deployed server, 10 Oct.** Claude Code ran MCP Inspector 2.10.1's CLI against the deployed `/mcp` at 19:39 UTC. `tools/list` returned `echo` with its input schema, and `tools/call` with the text "hello" returned "hello". The log shows its requests in the same order as locally, `initialize`, `notifications/initialized`, a `GET /mcp` that got the 405 and was tolerated, then `tools/list` and `tools/call`, each 2 to 10 ms on our side.
+
+## S4 findings
+
+**Date** 10 Oct 2026 · **Area** AI Assistants, per-caller credentials
+
+**Setup.** Thiago stored one key twice, as the integration secret `mcp_enc_key_spike` and the edge secret `MCP_ENC_KEY_SPIKE`, and shipped `mcp-spike` with the S4 code in about 4 min 30 s, the same as its S3 ship. The MCP server `mcp-spike` got `api_key_ref` `{{mcp_token | mcp_enc_key_spike}}`, and the assistant `spike-mcp` (`assistant-d67f035e-02e6-4a6d-ab5c-c4590afffb89`) points its dynamic variables webhook at the spike's `/dv`. The spike read the edge secret from its environment, and `/dv` returned the token.
+
+**Good path, browser call at 20:22:56 UTC.** Telnyx called `/dv` with the user agent `ai_assistants`, and the spike logged token id `3HsBmLGb6RSB3sU6`. From 0.3 s later every MCP request carried the bearer token with the suffix `6RSB3sU6`, `initialize` and `notifications/initialized` included, through `tools/list` and the `tools/call` at 20:23:05. The assistant said hello back. So Telnyx decrypts `encrypted_dynamic_variables.mcp_token` with the integration secret and sends the plain token as the bearer token on every request of the conversation.
+
+**Bad path, browser call at 20:24:23 UTC.** `/dv?mode=bad` returned a value that fails decryption, no `/mcp` request arrived, and the call crashed when the caller asked for the tool (issue 13).
 
 ---
 

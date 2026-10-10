@@ -175,7 +175,7 @@ The flags, the CRM lookup and the five area statuses start together. There are o
 | Failure | What the caller gets | How we notice |
 |---|---|---|
 | Webhook times out or errors | Telnyx falls back to defaults, `session_ok` stays `"false"`, and the Degraded node offers a person | Canary alert, `dv` error log, Degraded node in the transcript |
-| Token cannot be decrypted | Telnyx drops the MCP server for that call. The prompts tell the model to admit missing tools and offer a person | `dv` succeeded but no MCP calls arrive for that trace id |
+| Token cannot be decrypted, for example when the integration secret and the edge secret differ | Telnyx makes no MCP request. Its docs say the call goes on without the tools, but in S4 the call crashed at the first tool use (DEBUGLOG issue 13). Both copies of the key are written together from one value, and every key change gets a real test call before the demo | `dv` succeeded but no MCP calls arrive for that trace id, and the call ends when the caller needs a tool |
 | mock-crm slow or down | Caller treated as unknown and asked to verify | `crm_timeout` in the `dv` log, falling cache hit rate |
 | KV publish from the actor fails | The incident is still recorded, and the actor's alarm retries the publish | `publish_retry` log line, canary area check |
 | Actor call fails at call setup | No repeat-caller flag, and the call continues normally | `actor_error` field in the `dv` log |

@@ -48,3 +48,7 @@ Prove that a token returned in `encrypted_dynamic_variables` arrives at our MCP 
 - The good path shows the same token on both sides.
 - The bad path is described in `DEBUGLOG.md`, including what the caller hears, so the prompts can handle it.
 - ADR-008 is marked Accepted, or rewritten if the round trip does not work.
+
+## Result
+
+Done on 10 October, on the `spike-mcp` assistant. The good path showed the same token on both sides, and every MCP request carried it, `initialize` included. The bad path crashed the browser call at the first tool use, against Telnyx's per-caller credentials docs (DEBUGLOG issue 13). The phone path was not tested. ADR-008 is accepted, with the consequence that both copies of the key are written together from one value.
