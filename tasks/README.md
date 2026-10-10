@@ -1,6 +1,6 @@
 # Task cards
 
-Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T10 and T18 are written in full. Cards T11 to T17 are outlines in [later.md](later.md), detailed once the spikes have answered their questions.
+Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T10, T18 and T19 are written in full. Cards T11 to T17 are outlines in [later.md](later.md), detailed once the spikes have answered their questions.
 
 ## The loop for one card
 
@@ -67,8 +67,9 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T07 | AreaIncident domain and actor | T02 | done |
 | T18 | Session domain and actor | T02 | done |
 | T08 | voice-context function | T03, T04, T05, T06, T18, S1 | done |
-| T09 | voice-tools MCP server | T04, T06, T07, T08, T18, S3 | todo |
-| T10 | Deploy and smoke-test all three functions | T08, T09 | todo |
+| T09 | voice-tools MCP server core | T04, T08, T18, S3, S4 | todo |
+| T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | todo |
+| T10 | Deploy and smoke-test all three functions | T08, T09, T19 | todo |
 | T11 | Assistant provisioning script | S2, S4, T10 | outline |
 | T12 | Workflow content | T11 | outline |
 | T13 | End-to-end path tests | T12 | outline |

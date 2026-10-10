@@ -1,6 +1,6 @@
 # T10. Deploy and smoke-test all three functions
 
-**Phase** 1 · **Depends on** T08, T09 · **Hands-on** Thiago for secrets and ships · **Code by** implementer agent for `scripts/smoke.sh`
+**Phase** 1 · **Depends on** T08, T09, T19 · **Hands-on** Thiago for secrets and ships · **Code by** implementer agent for `scripts/smoke.sh`
 
 ## Goal
 
