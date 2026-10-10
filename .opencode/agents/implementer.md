@@ -4,9 +4,11 @@ mode: primary
 # Chosen in the T03 bake-off (ADR-018).
 model: telnyx/moonshotai/Kimi-K3
 # Sent to Telnyx as max_tokens. Without it GLM-5.3 stops every reply at 8,192 tokens,
-# reasoning included, so all three agents set it (DEBUGLOG issue 7).
-max_tokens: 16384
-steps: 60
+# reasoning included, so all three agents set it (DEBUGLOG issue 7). The implementer
+# gets 32,768 and 100 steps, because on T08 Kimi-K3 reached 16,384 while planning
+# and twice stopped at 60 steps.
+max_tokens: 32768
+steps: 100
 permission:
   # Nothing outside the repository. With --auto this would otherwise be approved.
   external_directory: deny
