@@ -268,7 +268,7 @@ test/area-incident.test.ts(1089,1): error TS1005: '}' expected.
 
 ## S1 measurements
 
-Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings and cold starts.
+Smoke test numbers from 9 Oct, server side, from invocation logs.
 
 | Request | Duration |
 |---|---|
@@ -277,6 +277,21 @@ Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings
 | Follow-up requests (seven samples) | 139 to 155 ms |
 
 Each of these requests includes one round trip to the counter actor.
+
+S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of the same key and one counter actor call with `performance.now()`. The request duration is server side, from `telnyx-edge logs smoke --type invocations`. The data is in `~/code/scratch/smoke` (`warm.jsonl`, `cold.jsonl`, `invocations.json`), and the ship took 5 min 50 s.
+
+| Measure | Warm, 20 samples (min / median / max) | 13 s after the warm series | After 26 min idle |
+|---|---|---|---|
+| Request duration | 1,965 / 2,257 / 2,548 ms | 2,968 ms | 2,450 ms |
+| KV put | 1,146 / 1,355 / 1,496 ms | 1,757 ms | 1,310 ms |
+| KV get | 668 / 806 / 941 ms | 940 ms | 852 ms |
+| Actor round trip | 134 / 141 / 160 ms | 269 ms | 284 ms |
+
+**No cold start was captured.** The two samples in `cold.jsonl` ran on the container that served the warm series. Its age was 3 h 48 min and 4 h 14 min, so it started at about 07:20 UTC, right after the ship, and stayed up through the 26-minute idle period. The first of those samples came only 13 s after the warm series. The best cold-start number is still the 537 ms first request after the 9 Oct deploy, which made no KV call.
+
+**KV calls dominate.** From inside a function a KV read takes about 0.8 s and a write about 1.4 s, warm, where the latency budget in `docs/ARCHITECTURE.md` assumed 50 ms for a read. The actor round trip is about 140 ms warm and 270 to 290 ms after even a short pause, as on 9 Oct.
+
+**Proposed `dynamic_variables_webhook_timeout_ms`, 4,000 ms, pending Thiago.** The card's rule takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. On the current T08 design the slowest call setup is a CRM cache miss after a pause. Its flags read (0.9 s), CRM cache read (0.9 s) and mock-crm call (about 1.2 s, an estimate, because S1 did not measure a call between functions) run one after another, followed by the slowest of the parallel steps, the 1.8 s session write. That is about 4.8 s, which times 1.5 is 7.3 s, so the 4,000 ms cap applies, and T08's budgets have to change to fit under it.
 
 ## S3 findings
 

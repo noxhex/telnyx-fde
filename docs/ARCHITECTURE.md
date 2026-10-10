@@ -143,13 +143,15 @@ When the session's identity level is below what a tool needs, the tool returns `
 
 The webhook's default timeout is 1.5 s, with a maximum of 10 s. We set `dynamic_variables_webhook_timeout_ms` from the cold start measured in spike S1, and target a p95 server time under 800 ms.
 
-| Step | Budget | Smoke-test evidence |
+| Step | Budget | Measured in S1, warm min / median / max |
 |---|---|---|
-| Signature check | 5 ms | |
-| CRM lookup, cache hit or miss | 50 or 450 ms | |
-| Area status read (KV) | 50 ms | to measure in S1 |
-| `CustomerAccount.recordCall` | 300 ms | actor round trip about 150 ms warm, about 290 ms after a pause |
-| Session write and token | 60 ms | |
+| Signature check | 5 ms | not measured, CPU only |
+| CRM lookup, cache hit or miss | 50 or 450 ms | KV read 668 / 806 / 941 ms. A miss adds the mock-crm call, which S1 did not measure |
+| Area status read (KV) | 50 ms | KV read 668 / 806 / 941 ms |
+| `CustomerAccount.recordCall` | 300 ms | 134 / 141 / 160 ms, and 269 to 284 ms after a pause |
+| Session write and token | 60 ms | KV write 1,146 / 1,355 / 1,496 ms, and 1,757 ms after a pause |
+
+The measured KV calls are more than ten times their budgets (DEBUGLOG, S1 measurements). New budgets and the webhook timeout wait for Thiago's decision.
 
 The CRM lookup runs first because it yields the account. The area read, the actor call and the session write then run in parallel. Each dependency has its own timeout, and a timeout degrades the answer (unknown caller, no repeat flag) instead of failing the webhook.
 

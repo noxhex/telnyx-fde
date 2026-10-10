@@ -54,7 +54,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 
 | Card | Title | Depends on | Status |
 |---|---|---|---|
-| S1 | Latency and cold start | none | todo |
+| S1 | Latency and cold start | none | done |
 | S2 | Workflow routing on a tool node | none | todo |
 | S3 | MCP transport in the edge runtime | none | code done, ship pending |
 | S4 | Per-call token round trip | S2, S3 | todo |
