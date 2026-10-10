@@ -209,6 +209,39 @@ expected {"total":30,"kv":60}   got {"total":30,"kv":0}
 
 **Design impact.** None.
 
+## 9. `telnyx-edge dev` has no secrets and no KV namespace
+
+**Date** 10 Oct 2026 · **Area** Edge Compute, local dev
+
+**Symptom.** In T05 the implementer could not show `GET /customers` returning a fixture under `telnyx-edge dev`. Every keyed route answered 401, and the flags stayed at their defaults. `/healthz`, unknown paths and the 401 itself behaved as designed.
+
+**Evidence.**
+
+```text
+# functions/mock-crm/.telnyx/dev/compose.yaml, the function container's whole environment
+PORT: "3000"
+DAPR_HTTP_PORT: "3500"
+DAPR_HOST: 127.0.0.1
+TELNYX_CONFIG_PATH: /app/telnyx.toml
+FUNCTION_ENTRY: /app/customer/index.js
+
+# .telnyx/dev/dapr-components/, the only Dapr component in the stack
+name: statestore
+type: state.postgresql
+
+# node_modules/@telnyx/edge-runtime/dist/build-env.js, how env.SECRETS.get works
+const url = `${this.daprUrlRoot}/v1.0/bindings/${this.bindingName}`;
+resp = await fetch(url, { method: "POST", ... });
+```
+
+`telnyx-edge dev --help` (CLI 0.5.10) describes the stack as the function and actor runtimes, their Dapr sidecars, Dapr placement and scheduler, and a Postgres actor state store, and it has no flag for secrets or an environment file.
+
+**Cause.** The dev stack emulates actors only. It has no secrets binding, so `env.SECRETS.get` fails, and no KV namespace binding, and no environment variables reach the function container. The "local KV" in the CLI's help is the actors' own storage.
+
+**Fix.** Nothing to fix in our code. `mock-crm` fails closed, so a secret it cannot read means 401. The keyed routes are covered by request-level tests, and they get checked on the deployed function in T10.
+
+**Design impact.** Acceptance item 3 of T05 is only half provable locally, and the keyed half moves to T10. How the demo makes local keyed calls is open for Thiago.
+
 ## S1 measurements
 
 Smoke test numbers so far, server side, from invocation logs. S1 adds KV timings and cold starts.

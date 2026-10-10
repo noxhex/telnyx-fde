@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@duinvezel/shared": "0.1.0",
-    "@telnyx/edge-runtime": "0.16.0"
+    "@telnyx/edge-runtime": "0.16.0",
+    "zod": "4.6.5"
   }
 }
