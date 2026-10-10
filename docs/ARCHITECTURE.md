@@ -177,7 +177,7 @@ The CRM lookup runs first because it yields the account. The area read, the acto
 Platform invocation logs run at least 30 seconds behind and record no client IP or user agent (DEBUGLOG issue 4). We use them for forensics, not detection. Detection comes from our own signals.
 
 - **One structured JSON line per request** with `ts`, `level`, `svc`, `event`, `trace_id`, `node`, `tool`, masked `caller` and `account`, `outcome`, `status`, `cache`, and `latency_ms` split into `total`, `kv`, `actor` and `crm`.
-- **One trace id per call.** `trace_id` is the call control id, so our logs join Telnyx's own conversation records. It reaches `voice-tools` through the session, and actors log it too.
+- **One trace id per call.** `trace_id` is the call control id, so our logs join Telnyx's own conversation records. It reaches `voice-tools` through the session. Callers pass it to every state-changing actor method as `traceId`, and each such method logs one line with it. `AreaIncident` keeps the trace id of the change that set its outbox, so its `publish` and `publish_retry` lines carry the trace id of the call behind them, also when the alarm writes them.
 - **A signal beyond logs.** Per-hop latency on every line, plus the canary's latency series in `canary/last`.
 - **Detection within a minute.** The Canary actor runs a synthetic end-to-end check every 30 seconds through the same code paths a call uses, and pushes an alert to a phone after two consecutive failures.
 - **A live view during the demo.** `telnyx-edge logs <function> --tail --json` piped through `jq`.

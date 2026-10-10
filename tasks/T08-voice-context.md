@@ -37,7 +37,7 @@ The call setup webhook. It must answer inside its budget with correct variables 
 4. Derive the session id with `sessionIdFromCallControlId`, and use the call control id itself as `trace_id`.
 5. **CRM lookup**, 400 ms timeout. Try `crm/phone/<digits>` in KV first. On a miss, call `GET {CRM_URL}/customers?phone=<digits>` with the internal key, and cache the result (the customer or a not-found marker) for 600 s. A timeout or error means an unknown caller, with the reason `crm_timeout` or `crm_error`.
 6. **Identity level.** No customer means `anonymous`. A customer with `telnyx_end_user_target_verified` true means `attested`. Any other customer means `number_match`.
-7. **In parallel**, each with its own timeout. Read the area status from `area/<postcode>/status` (200 ms, and a missing key means `ok`). Call `CUSTOMER_ACCOUNT.recordCall` with the session id as `callId` (400 ms, and a failure means `repeat_caller` `"false"` with the reason `actor_error`).
+7. **In parallel**, each with its own timeout. Read the area status from `area/<postcode>/status` (200 ms, and a missing key means `ok`). Call `CUSTOMER_ACCOUNT.recordCall` with the session id as `callId` and the trace id as `traceId` (400 ms, and a failure means `repeat_caller` `"false"` with the reason `actor_error`).
 8. **Session.** Write `session/<sid>` with a 7200 s TTL, holding `sid`, `traceId`, `identity`, `accountNumber` and `postcode` if known, `callerPhone` (E.164, needed later for callbacks) and `createdAt`. Use a 200 ms timeout, and if the write fails, log it and carry on.
 9. **Token.** Mint it with `exp` two hours ahead under `MCP_TOKEN_KEY`, then encrypt it with `MCP_ENC_KEY`. Both secrets are base64url strings, so turn them into bytes with `parseKey` once per container.
 10. **Respond** 200 with `{ dynamic_variables, encrypted_dynamic_variables: { mcp_token } }`. Build `dynamic_variables` exactly as the contract in `docs/WORKFLOW.md` says. Every value is a string, and booleans are `"true"` or `"false"`.
@@ -61,7 +61,8 @@ Requires `x-internal-key`. Run, each with a timeout, a KV put and get on `canary
 
 - [ ] `npm run check` passes.
 - [ ] Tests cover an unsigned request and a stale timestamp (403, with no KV access), a known attested caller, a number match, an unknown caller, a CRM timeout (anonymous and degraded), an actor failure (`repeat_caller` `"false"` and degraded), an outage area (`area_outage` `"true"` with `outage_eta`), `dv_force_error` (500), the response nesting values under `dynamic_variables` with every value a string, the token decrypting with `decryptForTests` and verifying, a cache hit skipping the CRM call on a second request, both disclosure outcomes, and an unknown path returning 404 with no KV access.
-- [ ] `test/helpers/signed-request.ts` can also print a signed `curl` command, and `/dv` answers it under `telnyx-edge dev`.
+- [ ] A test shows `recordCall` receiving the call's trace id as `traceId`.
+- [ ] Under `telnyx-edge dev`, `GET /healthz` answers 200, an unknown path 404, and an unsigned `POST /dv` 403. Dev has no `TELNYX_PUBLIC_KEY` and we cannot sign as Telnyx (DEBUGLOG issue 9), so the positive path is covered by the tests and by the first real call in T12.
 - [ ] Nothing is shipped.
 
 ## Out of scope

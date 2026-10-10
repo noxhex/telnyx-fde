@@ -50,7 +50,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 **Decision.** The actor publishes `area/<postcode>/status` to KV whenever the status changes. Call setup reads KV only. Publishing uses an outbox. The pending status is saved in actor storage in the same turn as the decision, the KV write follows, and the actor's alarm retries until it succeeds.
 
-**Consequences.** Reads fan out from KV. The announcement can be up to a second or two stale, which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV.
+**Consequences.** Reads fan out from KV. The announcement can be up to a second or two stale, which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV. A KV write that timed out has an unknown outcome (ADR-015) and may still land after a newer one, so after any timed-out publish the actor writes the then-current status again once at least 30 seconds have passed, longer than an actor method's budget. Only that confirming write clears the marker, so a late write cannot leave KV stale for longer than that.
 
 ## ADR-006. CustomerAccount actor for limits, history and tickets
 

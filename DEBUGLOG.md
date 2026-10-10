@@ -242,7 +242,7 @@ resp = await fetch(url, { method: "POST", ... });
 
 **Fix.** Nothing to fix in our code. `mock-crm` fails closed, so a secret it cannot read means 401. The keyed routes are covered by request-level tests, and they get checked on the deployed function in T10.
 
-**Design impact.** Acceptance item 3 of T05 is only half provable locally, and the keyed half moves to T10. How the demo makes local keyed calls is open for Thiago.
+**Design impact.** No dev-only override, because an override would be an auth bypass that could ship, and the demo and the scripts only ever call deployed functions. Under `telnyx-edge dev` the cards check routing, the fail-closed answers and the actor bindings. Keyed behaviour is proven by the request-level tests and on the deployed functions in T10 (Thiago, 10 Oct).
 
 ## S1 measurements
 

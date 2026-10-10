@@ -60,3 +60,4 @@ The script reads the function URLs from `infra/ids.json` and the internal key fr
 - [ ] `telnyx-edge inspect voice-context` shows the `CustomerAccount` actor binding.
 - [ ] Ship times are recorded in `DEBUGLOG.md`.
 - [ ] `infra/ids.json` is complete.
+- [ ] MCP Inspector against the deployed `/mcp`, with a token from `POST /internal/sessions` for a fixture account, lists the five tools and calls `verify_account` with the right postcode. `telnyx-edge logs voice-tools` then shows the actor's log line carrying that session's trace id, `internal-<sid>`.

@@ -56,6 +56,8 @@ List them in this order. Write each description for a voice model, saying when t
 
 Expected business outcomes (wrong postcode, locked, `needs_verification`) are normal results. A failing dependency returns a tool result with `isError: true` and one short sentence the model can say aloud, for example "The diagnostics system is not responding right now." Results go out as `content: [{ type: "text", text: <JSON of the result> }]`.
 
+Every actor call (`CUSTOMER_ACCOUNT.verify` and `createTicket`, and `AREA_INCIDENT.report`) passes the session's `traceId` as `traceId`, so the actors' log lines join this call's trace.
+
 ## Logging
 
 One line per request with `event` `"mcp"`, the JSON-RPC `method`, `tool`, `node` from `tool-nodes.ts`, `trace_id` from the session, `identity`, `outcome`, `status` and `latency_ms`.
@@ -65,8 +67,8 @@ One line per request with `event` `"mcp"`, the JSON-RPC `method`, `tool`, `node`
 - [ ] `npm run check` passes.
 - [ ] Protocol tests cover version negotiation, a notification returning 202, `ping`, `tools/list` returning the five tools with input schemas, an unknown method, invalid parameters, a batch, `GET /mcp` and an unknown path.
 - [ ] Auth tests cover no token, a bad signature, an expired token and a missing session, all returning 401 with no access beyond the session read.
-- [ ] Tool tests with stub clients cover each tool's happy path and identity gate, `verify_account` in both modes with wrong details and a lockout, `report_outage` passing the flags through, `create_ticket` dedupe and the anonymous callback, and a session for one account never reaching another.
-- [ ] MCP Inspector against `telnyx-edge dev` lists and calls the tools with a token from `POST /internal/sessions`.
+- [ ] Tool tests with stub clients cover each tool's happy path and identity gate, `verify_account` in both modes with wrong details and a lockout, `report_outage` passing the flags through, `create_ticket` dedupe and the anonymous callback, a session for one account never reaching another, and every actor call carrying the session's `traceId`.
+- [ ] Under `telnyx-edge dev`, `GET /healthz` answers 200, `GET /mcp` 405, `POST /mcp` without a token 401, an unknown path 404, and both actor bindings register. Dev has no `INTERNAL_KEY`, `MCP_TOKEN_KEY` or KV (DEBUGLOG issue 9), so MCP Inspector runs against the deployed function in T10.
 - [ ] Nothing is shipped.
 
 ## Out of scope
