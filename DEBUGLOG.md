@@ -187,7 +187,7 @@ DeepSeek-V4-Flash-0731   16384                          stop      14250         
 
 **Design impact.** `CLAUDE.md`, where a cut-off review gets one rerun with `--review-only` and a second cut-off on the same card goes to Thiago. The three agent files, which set `max_tokens`. GLM-5.3 stays the reviewer and does not write code (ADR-018).
 
-**Again at the higher cap, 10 Oct 2026.** Reviewing T07, a 1,351-line diff, GLM-5.3 spent its last step on 16,386 tokens of reasoning and wrote no text, so the 16,384 cap can still be reached. This time `tools/card.sh` failed the run as `cutoff:reviewer` with exit 4, and the one `--review-only` rerun finished and approved. The fix works as intended. Bigger diffs make a cut-off more likely. The T07 follow-up's review was cut off the same way, the second time on that card, and Thiago accepted the follow-up on Claude Code's review.
+**Again at the higher cap, 10 Oct 2026.** Reviewing T07, a 1,351-line diff, GLM-5.3 spent its last step on 16,386 tokens of reasoning and wrote no text, so the 16,384 cap can still be reached. This time `tools/card.sh` failed the run as `cutoff:reviewer` with exit 4, and the one `--review-only` rerun finished and approved. The fix works as intended. Bigger diffs make a cut-off more likely. The T07 follow-up's review was cut off the same way, the second time on that card, and Thiago accepted the follow-up on Claude Code's review. He then raised the reviewer's `max_tokens` to 32,768, the other two agents staying at 16,384. The T06 follow-up's review is the first test of the new value. If Telnyx rejects it, the value goes back to 16,384 and this entry says so.
 
 ## 8. A flaky timing test hid a measurement bug
 

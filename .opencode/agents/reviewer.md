@@ -4,8 +4,9 @@ mode: primary
 # Chosen in the T03 bake-off (ADR-018).
 model: telnyx/zai-org/GLM-5.3
 # Sent to Telnyx as max_tokens. Without it GLM-5.3 stops every reply at 8,192 tokens,
-# reasoning included, so all three agents set it (DEBUGLOG issue 7).
-max_tokens: 16384
+# reasoning included (DEBUGLOG issue 7). The reviewer gets 32,768, because GLM-5.3
+# reached 16,384 twice while reviewing T07.
+max_tokens: 32768
 temperature: 0.1
 permission:
   # Nothing outside the repository. With --auto this would otherwise be approved.
