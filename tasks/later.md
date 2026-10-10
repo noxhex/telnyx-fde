@@ -36,6 +36,8 @@ It manages the integration secret `mcp_enc_key` (from `DUINVEZEL_MCP_ENC_KEY`), 
 - `scripts/resolve-area.ts <postcode>` calls a new internal route that resolves an `AreaIncident`.
 - `scripts/tail.sh` tails all three functions' logs with useful `jq` filters.
 
+After the report that crosses the threshold, the script waits about 15 seconds before the next call, because the alarm publishes the new status a few seconds later and warm containers keep area statuses in memory for 10 seconds (ADR-005, ADR-019).
+
 **Done when** the threshold-crossing demo (path I) runs end to end from these scripts against the deployed functions.
 
 ## T16. Stretch goals
@@ -58,7 +60,6 @@ Small open points from accepted cards, done together near the end as follow-up r
 - **T02, logger.** Only a real cycle becomes `"[circular]"`, so an object that appears twice in one line is written in full both times. A clock that returns a non-finite value does not make `log()` throw.
 - **T05, delay cap.** A `crm_delay_ms` above 10,000 clamps to 10,000 instead of counting as invalid, so a typo during the demo still gives a slow CRM and every route stays far below the 30-second limit. Tests at 10,000 and 10,001. The T05 card gets the same line in that pass.
 - **T06, test gaps.** The error path of `recordCall` and the `locked` outcome of `verify` have no logging test, the older actor tests print log lines to stdout, and `customer-account.test.ts` lacks its final newline.
-- **T07, publish timeout (needs Thiago's decision).** The inline KV publish has a 300 ms timeout, and S1 measured KV writes at 1.1 to 1.8 s (DEBUGLOG issue 11). Every publish would then likely count as timed out, and the alarm would keep retrying every minute although the writes land. The choice is a longer inline timeout, which makes the declaring `report` about 1.4 s slower, or publishing from the alarm right away.
 - **Shared, `kvKeys.session`.** Sessions moved to the `Session` actor (ADR-019), so the helper has no caller. Remove it and its tests, so no later card writes a session to KV.
 - **T18, a default and an error path.** A test pins the default lock at exactly 15 minutes instead of computing it from `DEFAULT_LOCK_MS`. The `create` error path must not read a missing input, so the `"error"` line is still written and the original error rethrown. The actor tests capture their log lines instead of printing them.
 - **T08, pins and gaps.** A test pins the production cache lifetimes in `CACHE_TTL_MS` (10, 10 and 60 seconds), because the tests build their own caches. The soft budget gets a test at exactly 3,000 ms. The CRM client times its `INTERNAL_KEY` read as the `http` hop instead of inside `crm`, so T10's numbers for the call to mock-crm stay clean. A flags document that is present but malformed is not cached as the defaults. The memory caches drop expired entries on write or have a size bound, so the CRM cache cannot grow with every distinct caller for the life of a container. `/healthz` and unknown paths write one log line, as mock-crm does (AGENTS.md, Logging, and ADR-014).

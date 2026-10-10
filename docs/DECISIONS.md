@@ -44,13 +44,13 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-005. Area status is a KV read model published by the actor
 
-**Status.** Accepted
+**Status.** Accepted. On 10 October the KV write moved from the actor method into its alarm (DEBUGLOG issue 11).
 
 **Context.** Every call setup needs the caller's area status. Routing those reads through the actor would queue every caller from the outage area on one single-threaded instance at the worst possible moment, and the smoke test measured an actor round trip at about 150 ms warm and about 290 ms after a pause.
 
-**Decision.** The actor publishes `area/<postcode>/status` to KV whenever the status changes. Call setup reads KV only. Publishing uses an outbox. The pending status is saved in actor storage in the same turn as the decision, the KV write follows, and the actor's alarm retries until it succeeds.
+**Decision.** The actor publishes `area/<postcode>/status` to KV whenever the status changes. Call setup reads KV only. Publishing uses an outbox. The pending status is saved in actor storage in the same turn as the decision, and that turn sets the alarm to fire straight away. The alarm writes the status to KV with a 5,000 ms timeout, since alarms have a 15-minute budget, and retries until the write succeeds. No actor method waits for KV (ADR-019).
 
-**Consequences.** Reads fan out from KV. The announcement can be a second or two stale, plus up to 10 seconds in a warm container's memory cache (ADR-019), which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV. A KV write that timed out has an unknown outcome (ADR-015) and may still land after a newer one, so after any timed-out publish the actor writes the then-current status again once at least 30 seconds have passed, longer than an actor method's budget. Only that confirming write clears the marker, so a late write cannot leave KV stale for longer than that.
+**Consequences.** Reads fan out from KV. The announcement can be a few seconds stale (the alarm and the KV write), plus up to 10 seconds in a warm container's memory cache (ADR-019), which is fine for "there is an outage in your area". The outbox closes the dual-write gap between actor storage and KV. The report that declares an incident returns without waiting for a KV write, which S1 measured at 1.1 to 1.8 s. A KV write that timed out has an unknown outcome (ADR-015) and may still land after a newer one, so after any timed-out publish the alarm writes the then-current status again once at least 30 seconds have passed, far longer than S1's slowest KV write. Only that confirming write clears the marker. A write that landed even later would leave KV stale, and only a compare-and-swap could rule that out, which KV does not have.
 
 ## ADR-006. CustomerAccount actor for limits, history and tickets
 
@@ -84,15 +84,15 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-009. Stateless MCP over Streamable HTTP
 
-**Status.** Pending (spike S3). The SDK runs in the edge runtime, and Telnyx's own client is still to be tested.
+**Status.** Accepted, 10 October, after spike S3. The SDK stays.
 
-**Evidence.** DEBUGLOG S3 findings, local part.
+**Evidence.** DEBUGLOG S3 findings, local and deployed.
 
 **Context.** Containers recycle and scale to zero, any request can land on any container, and requests are capped at 30 seconds. Long-lived SSE streams and in-memory MCP sessions do not fit.
 
 **Decision.** Every MCP request is a self-contained POST answered with a JSON response. Session state lives in the `Session` actor (ADR-019). The server is built on the official SDK (`@modelcontextprotocol/sdk` 1.32.1): its `WebStandardStreamableHTTPServerTransport` speaks fetch `Request`/`Response` directly, so it runs inside the edge fetch handler unmodified, in stateless mode (no session id generator, so no `Mcp-Session-Id`) with `enableJsonResponse`. Each POST builds a fresh server and transport pair, because the SDK refuses to reuse a stateless transport across requests. The one override is protocol negotiation: the SDK also echoes the 2024-* versions and falls back to its latest, so a small `setRequestHandler` replacement pins the supported set to `2025-11-25` / `2025-06-18` / `2025-03-26` with `2025-06-18` as the fallback. Strict routing stays ours: only `POST /mcp` reaches the SDK, `GET /mcp` gets a 405 and every other path a 404 before any dispatch.
 
-**Consequences.** No sticky sessions, nothing to lose on a restart, and MCP Inspector can test every request in isolation. The JSON-RPC framing, batching, parse errors and header validation come from the SDK instead of hand-rolled code. The SDK's own client opens a `GET /mcp` stream after `initialize` and tolerates our 405, but whether Telnyx's MCP client does is unproven until the spike ships (card S3 steps 3-4); if Telnyx requires the GET, the 405 answer moves from our router into an SDK-shaped JSON-RPC error. The SDK also answers 406 to a POST whose `Accept` header lacks `text/event-stream`, so the `Accept` header Telnyx sends decides whether the SDK can stay. If Telnyx's client fails either check, the hand-rolled subset named above is the fallback.
+**Consequences.** No sticky sessions, nothing to lose on a restart, and MCP Inspector can test every request in isolation. The JSON-RPC framing, batching, parse errors and header validation come from the SDK instead of hand-rolled code. The SDK stays because Telnyx's client passed both checks that were still open. It never sent `GET /mcp`, so our 405 never comes into play, and no request got the 406 the SDK gives a POST whose `Accept` header lacks `text/event-stream`. It initialised once at the start of the conversation, then sent `tools/list` and later `tools/call` with protocol version `2025-11-25`, each a POST that took 9 to 51 ms on our side. The SDK's own client in MCP Inspector opens a `GET /mcp` stream after `initialize` and tolerates the 405. T09 adds the SDK to voice-tools at exactly 1.32.1, the version the spike ran, and the hand-rolled subset is no longer needed as a fallback.
 
 ## ADR-010. Route on a tool node right after the disclosure
 

@@ -39,7 +39,7 @@ Prove that a token returned in `encrypted_dynamic_variables` arrives at our MCP 
    ```
 
 2. The agent adds the behaviour above, and Thiago ships.
-3. On the `spike-routing` assistant, set the dynamic variables webhook URL to the deployed `/dv`, and set the MCP server's credential to `{{mcp_token | mcp_enc_key_spike}}`.
+3. On the `spike-mcp` assistant from S3, which has the MCP server attached, set the dynamic variables webhook URL to the deployed `/dv`, and set the MCP server's credential to `{{mcp_token | mcp_enc_key_spike}}`.
 4. **Good path.** Call the number and ask for the echo tool. The token id logged by `/dv` must match the suffix logged by `/mcp`.
 5. **Bad path.** Change the webhook URL to `/dv?mode=bad` and call again. Expect no `/mcp` requests at all, and note what the assistant says when asked to use the tool.
 

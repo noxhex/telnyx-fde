@@ -47,7 +47,7 @@ S1 captured no cold start and did not time a call between functions (DEBUGLOG, S
 1. **Cold start.** Right after each ship, send the function its first request, `GET /healthz`, which touches no state. Record the client time from `curl -s -o /dev/null -w '%{time_total}\n' <url>/healthz` and the server-side duration from `telnyx-edge logs <name> --type invocations`. Then send five more for the warm numbers.
 2. **voice-context's calls.** After the voice-context ship, call `GET /internal/health` with the internal key ten times. Its answer holds `latency_ms` for the KV put and get, the CRM lookup and the two actor calls, as seen from inside voice-context. The first call also includes whatever is still cold.
 
-Record both next to S1's numbers in `DEBUGLOG.md`, with the times of day, and say whether any number moves the budget in `docs/ARCHITECTURE.md` (Call setup latency budget).
+Record both next to S1's numbers in `DEBUGLOG.md`, with the times of day, and say whether any number moves the budget in `docs/ARCHITECTURE.md` (Call setup latency budget). The 1,500 ms that voice-tools allows for `GET /accounts` on mock-crm is an estimate that stays until this measurement, and then gets set from the measured call between functions.
 
 ## `scripts/smoke.sh` (agent)
 

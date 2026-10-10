@@ -37,3 +37,7 @@ The `@modelcontextprotocol/sdk` dependency is allowed in this spike only.
 - The Telnyx assistant calls `echo` successfully, and the log shows Telnyx's requests.
 - ADR-009 records SDK or hand-rolled, with the reason.
 - `DEBUGLOG.md` notes what Telnyx's client sends, including the protocol version, user agent, whether it initializes once per call or per request, and which headers arrive.
+
+## Result
+
+Done on 10 October. Thiago registered the deployed server through the API instead of the portal (`POST /v2/ai/mcp_servers`, type `http`, id `f95f0bc9-c0c1-433e-9696-9910bd55523f`) and attached it to `spike-mcp`, a plain single-prompt assistant, instead of `spike-routing`, so the test stayed clear of the workflow and the smoke function. The assistant called `echo`, and MCP Inspector listed and called it against the deployed server. The findings are in `DEBUGLOG.md` (S3 findings), and ADR-009 is accepted with the SDK.

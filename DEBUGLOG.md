@@ -189,6 +189,8 @@ DeepSeek-V4-Flash-0731   16384                          stop      14250         
 
 **Again at the higher cap, 10 Oct 2026.** Reviewing T07, a 1,351-line diff, GLM-5.3 spent its last step on 16,386 tokens of reasoning and wrote no text, so the 16,384 cap can still be reached. This time `tools/card.sh` failed the run as `cutoff:reviewer` with exit 4, and the one `--review-only` rerun finished and approved. The fix works as intended. Bigger diffs make a cut-off more likely. The T07 follow-up's review was cut off the same way, the second time on that card, and Thiago accepted the follow-up on Claude Code's review. He then raised the reviewer's `max_tokens` to 32,768, the other two agents staying at 16,384. The T06 follow-up's review is the first test of the new value. If Telnyx rejects it, the value goes back to 16,384 and this entry says so. Telnyx accepted it, and that review finished normally. Its largest step was 5,942 tokens, so the higher cap was not needed that time.
 
+**The implementer's cap, 10 Oct 2026.** On T08 Kimi-K3 spent a whole step of 16,384 tokens on reasoning before writing any file, and later stopped twice at its 60-step limit. Thiago raised the implementer to 32,768 tokens and 100 steps. A scratch agent on Kimi-K3 with `max_tokens: 32768` answered normally, so Telnyx accepts the value.
+
 ## 8. A flaky timing test hid a measurement bug
 
 **Date** 9 Oct 2026 · **Area** Tests, `packages/shared` timing
@@ -353,7 +355,7 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 
 **Date** 10 Oct 2026 · **Area** Edge Compute, MCP transport
 
-**The official SDK runs in the edge fetch handler.** `@modelcontextprotocol/sdk` 1.32.1 ships `WebStandardStreamableHTTPServerTransport` (`server/webStandardStreamableHttp.js`), a pure Web Standard transport: `Request`/`Response`/`ReadableStream`, no `node:` imports. In stateless mode (`sessionIdGenerator: undefined`) with `enableJsonResponse: true`, every POST gets one `application/json` body back and no `Mcp-Session-Id` header. The card's whole behaviour matrix passed locally against `telnyx-edge dev` (CLI 0.5.10): `initialize` echoes `2025-11-25` / `2025-06-18` / `2025-03-26` and answers `2025-06-18` to anything else (`2024-11-05` included), notifications get a bare 202, `ping` gets `{}`, `tools/list` and `tools/call` `echo` work, an unknown tool gets JSON-RPC error -32602 over HTTP 200, `GET /mcp` gets a 405 and unknown paths a 404, and every request writes one JSON log line with the rpc method/id, `user_agent`, `has_authorization` and the `mcp-protocol-version` header. MCP Inspector 0.17.x (`--cli --transport http`) listed the tools and called `echo` with the text "hello" against the local server.
+**The official SDK runs in the edge fetch handler.** `@modelcontextprotocol/sdk` 1.32.1 ships `WebStandardStreamableHTTPServerTransport` (`server/webStandardStreamableHttp.js`), a pure Web Standard transport: `Request`/`Response`/`ReadableStream`, no `node:` imports. In stateless mode (`sessionIdGenerator: undefined`) with `enableJsonResponse: true`, every POST gets one `application/json` body back and no `Mcp-Session-Id` header. The card's whole behaviour matrix passed locally against `telnyx-edge dev` (CLI 0.5.10): `initialize` echoes `2025-11-25` / `2025-06-18` / `2025-03-26` and answers `2025-06-18` to anything else (`2024-11-05` included), notifications get a bare 202, `ping` gets `{}`, `tools/list` and `tools/call` `echo` work, an unknown tool gets JSON-RPC error -32602 over HTTP 200, `GET /mcp` gets a 405 and unknown paths a 404, and every request writes one JSON log line with the rpc method/id, `user_agent`, `has_authorization` and the `mcp-protocol-version` header. MCP Inspector 2.10.1 (`--cli --transport http`) listed the tools and called `echo` with the text "hello" against the local server.
 
 **Two SDK defaults needed overriding.** The negotiation: the SDK echoes the 2024-* versions and falls back to its own latest, so a `setRequestHandler` replacement pins the card's three versions and the `2025-06-18` fallback. And a stateless transport cannot be reused (`Stateless transport cannot be reused across requests`), so each POST builds a fresh `Server` + transport pair; both are plain objects, no I/O at construction.
 
@@ -371,7 +373,24 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 
 User agent is `node`. One `initialize` per connection, with integer id 0 and no `mcp-protocol-version` header; every request after it carries the negotiated version in that header, notifications included. Right after `initialize` the client opens `GET /mcp` for the server-to-client stream, takes our 405 without complaint and proceeds to `tools/list` and `tools/call`. JSON-RPC ids are integers counting up from 0 per connection.
 
-**Pending: what Telnyx's client sends.** Card S3 steps 3-4 are hands-on (Thiago): `time telnyx-edge ship`, register the deployed `/mcp` URL as an MCP server of type `http` on the `spike-routing` assistant, ask it to call `echo` with the text "hello", then read `telnyx-edge logs mcp-spike --type runtime`. Record here: the protocol version Telnyx requests, its user agent, whether it initializes once per call or per request, which headers arrive (an `authorization` header present? `mcp-protocol-version`? the full `Accept`?), and whether it attempts `GET /mcp` and tolerates the 405 (ADR-009 names that the fallback if it does not). Also record the ship time under ADR-016.
+**What Telnyx's client sends, deployed, 10 Oct.** Thiago shipped the spike to `https://mcp-spike-fdb8da70-9.telnyxcompute.com`, registered it through the API (`POST /v2/ai/mcp_servers`, type `http` accepted, id `f95f0bc9-c0c1-433e-9696-9910bd55523f`) and attached it to `spike-mcp`, a plain single-prompt assistant, instead of `spike-routing`, so the test stayed clear of the workflow and the smoke function. On a browser test call, asked to echo hello, the assistant said hello back. The runtime log for that call, from `telnyx-edge logs mcp-spike --type runtime`, trimmed to the fields that matter:
+
+```text
+[2026-10-10T19:33:34.315Z] {"event":"mcp_request","route":"mcp","status":200,"user_agent":"python-httpx/0.28.1","has_authorization":false,"mcp_protocol_version":null,"rpc_method":"initialize","rpc_id":0}
+[2026-10-10T19:33:34.888Z] {"event":"mcp_request","route":"mcp","status":202,"user_agent":"python-httpx/0.28.1","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"notifications/initialized","rpc_id":null}
+[2026-10-10T19:33:34.936Z] {"event":"mcp_request","route":"mcp","status":200,"user_agent":"python-httpx/0.28.1","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"tools/list","rpc_id":1}
+[2026-10-10T19:33:40.744Z] {"event":"mcp_request","route":"mcp","status":200,"user_agent":"python-httpx/0.28.1","has_authorization":false,"mcp_protocol_version":"2025-11-25","rpc_method":"tools/call","rpc_id":2}
+# telnyx-edge logs mcp-spike --type invocations, the same four requests
+POST 200 51.359882ms   POST 202 10.307329ms   POST 200 9.473758ms   POST 200 15.197362ms
+```
+
+- One `initialize` at the start of the conversation, with JSON-RPC id 0 and no protocol header yet. The `tools/call` six seconds later came without a new `initialize`, so Telnyx's client initialises once per conversation, not per request.
+- Protocol version `2025-11-25` on every request after `initialize`, one of the three versions the server accepts.
+- User agent `python-httpx/0.28.1`, and no `authorization` header, because no credential was configured. S4 tests the bearer token.
+- No `GET /mcp` at all, so the 405 never came into play, and no 406, so Telnyx's `Accept` header satisfies the SDK.
+- Every request was a POST taking 9 to 51 ms on our side.
+
+**MCP Inspector against the deployed server, 10 Oct.** Claude Code ran MCP Inspector 2.10.1's CLI against the deployed `/mcp` at 19:39 UTC. `tools/list` returned `echo` with its input schema, and `tools/call` with the text "hello" returned "hello". The log shows its requests in the same order as locally, `initialize`, `notifications/initialized`, a `GET /mcp` that got the 405 and was tolerated, then `tools/list` and `tools/call`, each 2 to 10 ms on our side.
 
 ---
 
