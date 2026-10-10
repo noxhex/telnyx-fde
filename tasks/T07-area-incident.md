@@ -73,6 +73,7 @@ export function currentStatus(s: AreaIncidentState, formatEta: (etaAt: number) =
 - **During an outage**, further reports are counted and stored but never declare again.
 - **`resolve`** sets the status to `ok`, clears the reports and the incident, increments the version and sets the outbox. Resolving an area that is already `ok` changes nothing and returns `resolved: false`.
 - **`markPublished`** clears the outbox only if the outbox version equals `version`, so an older publish cannot clear a newer status.
+- **Broken inputs.** A `nowMs`, `windowMs` or `etaMs` that is not a finite number, or a `threshold` that is not a positive whole number, makes the domain function throw a `RangeError` instead of returning a result, so nothing is counted, declared or resolved with a broken clock (AGENTS.md, Time inputs fail closed).
 
 ## Actor adapter
 
@@ -85,7 +86,7 @@ After saving, if there is an outbox, the adapter writes it to KV at `kvKeys.area
 ## Acceptance
 
 - [ ] `npm run check` passes.
-- [ ] Domain tests cover the threshold reached at exactly N distinct accounts with only that report declaring, a duplicate reporter not counting, reports leaving the window, no second declaration during an outage, resolve and the resolve no-op, version increments, the outbox set on declare and resolve, and `markPublished` ignoring a stale version.
+- [ ] Domain tests cover the threshold reached at exactly N distinct accounts with only that report declaring, a duplicate reporter not counting, reports leaving the window, no second declaration during an outage, resolve and the resolve no-op, version increments, the outbox set on declare and resolve, `markPublished` ignoring a stale version, and a non-finite `nowMs` throwing in `report` and `resolve`.
 - [ ] A test feeds 50 reports from 10 accounts in random order (seeded random) and asserts exactly one declaration.
 - [ ] `telnyx-edge dev` starts `voice-tools` with both actor bindings.
 - [ ] Nothing is shipped.

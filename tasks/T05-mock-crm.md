@@ -57,7 +57,7 @@ Every route except `/healthz` requires the header `x-internal-key` to equal the 
 
 ## Flags
 
-Read `flags/global` from KV with a 10-second in-memory cache. `crm_delay_ms` (default 0) adds that delay to every route except `/healthz`. `crm_fail` (default false) makes every route except `/healthz` return 503 `{ "error": "unavailable" }`. Invalid or missing flags fall back to the defaults. The delay function is injected, so tests do not wait.
+Read `flags/global` from KV with a 10-second in-memory cache. `crm_delay_ms` (default 0) adds that delay to every route except `/healthz`. `crm_fail` (default false) makes every route except `/healthz` return 503 `{ "error": "unavailable" }`. Invalid or missing flags fall back to the defaults, and a `crm_delay_ms` that is not a finite, non-negative number counts as invalid (AGENTS.md, Time inputs fail closed). The delay function is injected, so tests do not wait.
 
 ## Logging
 
