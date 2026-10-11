@@ -35,10 +35,14 @@ import type { ActorNamespace, Env, KvNamespace, Secrets } from "@telnyx/edge-run
 import { createLogger, createMemoryCache, parseKey, SHARED_VERSION, startTimings } from "@duinvezel/shared";
 
 import type { AreaStatusDoc } from "./area-status.js";
+import { createAccountsClient } from "./clients/accounts.js";
+import { createAreasClient } from "./clients/areas.js";
 import { createCrmClient } from "./clients/crm.js";
 import { createSessionsClient } from "./clients/sessions.js";
+import type { ToolsFlags } from "./flags.js";
 import {
   AREA_CACHE_TTL_MS,
+  FLAG_CACHE_TTL_MS,
   realTimeoutRunner,
   SECRET_READ_TIMEOUT_MS,
   SERVICE_NAME,
@@ -89,7 +93,10 @@ const logger = createLogger(SERVICE_NAME);
 /** The per-container area-status memory cache, created once with the rest of the module (ADR-019). */
 const areaCache = createMemoryCache<AreaStatusDoc | null>(AREA_CACHE_TTL_MS, () => Date.now());
 
-const caches: CachesDep = { areas: areaCache };
+/** The per-container flags memory cache, created once next to the area cache (ADR-019, T19). */
+const flagsCache = createMemoryCache<ToolsFlags>(FLAG_CACHE_TTL_MS, () => Date.now());
+
+const caches: CachesDep = { areas: areaCache, flags: flagsCache };
 
 /** Per-container secret memo: successes only, so a failed read is retried on the next request. */
 const secretTextCache = new Map<string, string>();
@@ -150,6 +157,8 @@ export function buildDeps(env: VoiceToolsEnv): VoiceToolsDeps {
     now: () => Date.now(),
     kv: env.KV,
     sessions: createSessionsClient(env.SESSION),
+    accounts: createAccountsClient(env.CUSTOMER_ACCOUNT),
+    areas: createAreasClient(env.AREA_INCIDENT),
     crm: createCrmClient({
       crmUrl: process.env.CRM_URL ?? "",
       readInternalKey: async () => {

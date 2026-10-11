@@ -5,13 +5,21 @@ import { describe, expect, it } from "vitest";
 import type { ActorNamespace } from "@telnyx/edge-runtime";
 
 import { mintSessionToken, parseKey } from "@duinvezel/shared";
-import type { CreateSessionInput, CreateSessionResult, SessionDoc } from "@duinvezel/shared";
+import type {
+  CreateSessionInput,
+  CreateSessionResult,
+  SessionDoc,
+  SetVerifiedResult,
+  VerifyFailureResult,
+} from "@duinvezel/shared";
 
 import { createClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import type { ClockFake } from "../../../packages/shared/test/fakes/clock.js";
 
 import { TIMED_OUT } from "../src/config.js";
 import type { TimeoutRunner } from "../src/config.js";
+import type { AccountsClient } from "../src/clients/accounts.js";
+import type { AreasClient } from "../src/clients/areas.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import type { CrmClient } from "../src/clients/crm.js";
 import type { CachesDep, SecretsDep, VoiceToolsDeps } from "../src/deps.js";
@@ -71,7 +79,25 @@ class SessionsStub implements SessionsClient {
     this.gets.push(sid);
     return Promise.resolve(this.session);
   }
+
+  setVerified(): Promise<SetVerifiedResult> {
+    throw new Error("unexpected SESSION.setVerified");
+  }
+
+  recordVerifyFailure(): Promise<VerifyFailureResult> {
+    throw new Error("unexpected SESSION.recordVerifyFailure");
+  }
 }
+
+/** Protocol tests run no state-changing tool logic; any call is a bug. */
+const accountsNever: AccountsClient = {
+  verify: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.verify")),
+  createTicket: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.createTicket")),
+};
+
+const areasNever: AreasClient = {
+  report: () => Promise.reject(new Error("unexpected AREA_INCIDENT.report")),
+};
 
 class SecretsStub implements SecretsDep {
   readonly reads: string[] = [];
@@ -116,7 +142,10 @@ function makeHarness(): Harness {
   sessions.session = liveSession(T0);
   const secrets = new SecretsStub({ MCP_TOKEN_KEY: TOKEN_KEY_RAW });
   const lines: string[] = [];
-  const caches: CachesDep = { areas: createMemoryCache(10_000, clock.now) };
+  const caches: CachesDep = {
+    areas: createMemoryCache(10_000, clock.now),
+    flags: createMemoryCache(10_000, clock.now),
+  };
   const log = createLogger(
     "voice-tools",
     (line) => {
@@ -124,12 +153,17 @@ function makeHarness(): Harness {
     },
     clock.now,
   );
-  const crm: CrmClient = { testLine: () => Promise.resolve({ ok: false }) };
+  const crm: CrmClient = {
+    testLine: () => Promise.resolve({ ok: false }),
+    getAccount: () => Promise.reject(new Error("unexpected mock-crm GET /accounts")),
+  };
   const deps: VoiceToolsDeps = {
     now: clock.now,
     kv: undefined,
     sessions,
     crm,
+    accounts: accountsNever,
+    areas: areasNever,
     caches,
     secrets,
     log,
@@ -323,7 +357,7 @@ describe("MCP framing", () => {
 // ---------- tools/list ----------
 
 describe("tools/list", () => {
-  it("returns the two tools in the card's order with input schemas", async () => {
+  it("returns the five tools in the card's order with input schemas", async () => {
     const h = makeHarness();
     const res = await h.post({ jsonrpc: "2.0", id: 5, method: "tools/list" });
     expect(res.status).toBe(200);
@@ -337,13 +371,28 @@ describe("tools/list", () => {
       };
     };
     expect(body.result.tools.map((tool) => tool.name)).toEqual([
+      "verify_account",
       "check_area_status",
       "run_line_diagnostics",
+      "report_outage",
+      "create_ticket",
     ]);
-    const [area, diagnostics] = body.result.tools;
+    const [verify, area, diagnostics, outage, ticket] = body.result.tools;
     // Written for a voice model: each description says when to use the tool.
+    expect(verify?.description).toContain("before anything that touches their account");
     expect(area?.description).toContain("whenever the caller asks about an outage");
     expect(diagnostics?.description).toContain("internet is down, slow or unstable");
+    expect(outage?.description).toContain("Reports that the caller's own internet is out");
+    expect(ticket?.description).toContain("needs a technician");
+    expect(verify?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        postcode: { type: "string", pattern: "^\\d{4}$" },
+        account_number: { type: "string" },
+      },
+      required: ["postcode"],
+      additionalProperties: false,
+    });
     expect(area?.inputSchema).toMatchObject({
       type: "object",
       properties: { postcode: { type: "string", pattern: "^\\d{4}$" } },
@@ -353,6 +402,23 @@ describe("tools/list", () => {
     expect(diagnostics?.inputSchema).toMatchObject({
       type: "object",
       properties: {},
+      additionalProperties: false,
+    });
+    expect(outage?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        symptom: { type: "string", enum: ["no_connection", "slow", "intermittent", "other"] },
+      },
+      required: ["symptom"],
+      additionalProperties: false,
+    });
+    expect(ticket?.inputSchema).toMatchObject({
+      type: "object",
+      properties: {
+        category: { type: "string", enum: ["repair_visit", "callback", "other"] },
+        summary: { type: "string", maxLength: 300 },
+      },
+      required: ["category", "summary"],
       additionalProperties: false,
     });
   });

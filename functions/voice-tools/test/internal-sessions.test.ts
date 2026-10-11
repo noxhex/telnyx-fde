@@ -8,11 +8,19 @@ import {
   parseKey,
   verifySessionToken,
 } from "@duinvezel/shared";
-import type { CreateSessionInput, CreateSessionResult, SessionDoc } from "@duinvezel/shared";
+import type {
+  CreateSessionInput,
+  CreateSessionResult,
+  SessionDoc,
+  SetVerifiedResult,
+  VerifyFailureResult,
+} from "@duinvezel/shared";
 
 import { createClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import type { ClockFake } from "../../../packages/shared/test/fakes/clock.js";
 
+import type { AccountsClient } from "../src/clients/accounts.js";
+import type { AreasClient } from "../src/clients/areas.js";
 import type { CrmClient } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import { TIMED_OUT } from "../src/config.js";
@@ -148,7 +156,25 @@ class SessionsStub implements SessionsClient {
   get(_sid: string, _input: { nowMs: number }): Promise<SessionDoc | null> {
     throw new Error("unexpected SESSION.get");
   }
+
+  setVerified(): Promise<SetVerifiedResult> {
+    throw new Error("unexpected SESSION.setVerified");
+  }
+
+  recordVerifyFailure(): Promise<VerifyFailureResult> {
+    throw new Error("unexpected SESSION.recordVerifyFailure");
+  }
 }
+
+/** The internal-sessions route never reaches these; any call is a bug. */
+const accountsNever: AccountsClient = {
+  verify: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.verify")),
+  createTicket: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.createTicket")),
+};
+
+const areasNever: AreasClient = {
+  report: () => Promise.reject(new Error("unexpected AREA_INCIDENT.report")),
+};
 
 class SecretsStub implements SecretsDep {
   readonly reads: string[] = [];
@@ -209,7 +235,10 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
     ...secretValues,
   });
   const lines: string[] = [];
-  const caches: CachesDep = { areas: createMemoryCache(10_000, clock.now) };
+  const caches: CachesDep = {
+    areas: createMemoryCache(10_000, clock.now),
+    flags: createMemoryCache(10_000, clock.now),
+  };
   const log = createLogger(
     "voice-tools",
     (line) => {
@@ -217,13 +246,18 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
     },
     clock.now,
   );
-  const crm: CrmClient = { testLine: () => Promise.resolve({ ok: false }) };
+  const crm: CrmClient = {
+    testLine: () => Promise.resolve({ ok: false }),
+    getAccount: () => Promise.reject(new Error("unexpected mock-crm GET /accounts")),
+  };
   const pinnedSidBytes = new Uint8Array(Buffer.from(PINNED_SID, "hex"));
   const deps: VoiceToolsDeps = {
     now: clock.now,
     kv: undefined,
     sessions,
     crm,
+    accounts: accountsNever,
+    areas: areasNever,
     caches,
     secrets,
     log,

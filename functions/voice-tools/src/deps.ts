@@ -19,13 +19,18 @@ import type { KvNamespace } from "@telnyx/edge-runtime";
 import type { Logger, MemoryCache } from "@duinvezel/shared";
 
 import type { AreaStatusDoc } from "./area-status.js";
+import type { AccountsClient } from "./clients/accounts.js";
+import type { AreasClient } from "./clients/areas.js";
 import type { CrmClient } from "./clients/crm.js";
 import type { SessionsClient } from "./clients/sessions.js";
 import type { TimeoutRunner } from "./config.js";
+import type { ToolsFlags } from "./flags.js";
 
 export interface CachesDep {
   /** Per-postcode status answers, 10 s; null is the "never published, so ok" answer. */
   areas: MemoryCache<AreaStatusDoc | null>;
+  /** The `flags/global` document, 10 s; only parsed answers, never a timeout or the defaults (T19). */
+  flags: MemoryCache<ToolsFlags>;
 }
 
 export interface SecretsDep {
@@ -40,6 +45,10 @@ export interface VoiceToolsDeps {
   kv: KvNamespace | undefined;
   sessions: SessionsClient;
   crm: CrmClient;
+  /** `CUSTOMER_ACCOUNT` typed with the class's own method shapes (T19). */
+  accounts: AccountsClient;
+  /** `AREA_INCIDENT` typed with the class's own method shapes (T19). */
+  areas: AreasClient;
   caches: CachesDep;
   secrets: SecretsDep;
   log: Logger;

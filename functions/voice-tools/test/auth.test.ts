@@ -3,11 +3,19 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { createLogger, createMemoryCache, mintSessionToken, parseKey } from "@duinvezel/shared";
-import type { CreateSessionInput, CreateSessionResult, SessionDoc } from "@duinvezel/shared";
+import type {
+  CreateSessionInput,
+  CreateSessionResult,
+  SessionDoc,
+  SetVerifiedResult,
+  VerifyFailureResult,
+} from "@duinvezel/shared";
 
 import { createClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import type { ClockFake } from "../../../packages/shared/test/fakes/clock.js";
 
+import type { AccountsClient } from "../src/clients/accounts.js";
+import type { AreasClient } from "../src/clients/areas.js";
 import type { CrmClient } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import { TIMED_OUT } from "../src/config.js";
@@ -146,7 +154,25 @@ class SessionsStub implements SessionsClient {
     this.heldGet = hold<SessionDoc | null>();
     return this.heldGet;
   }
+
+  setVerified(): Promise<SetVerifiedResult> {
+    throw new Error("unexpected SESSION.setVerified");
+  }
+
+  recordVerifyFailure(): Promise<VerifyFailureResult> {
+    throw new Error("unexpected SESSION.recordVerifyFailure");
+  }
 }
+
+/** Auth tests never reach a tool; any state-changing actor call is a bug. */
+const accountsNever: AccountsClient = {
+  verify: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.verify")),
+  createTicket: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.createTicket")),
+};
+
+const areasNever: AreasClient = {
+  report: () => Promise.reject(new Error("unexpected AREA_INCIDENT.report")),
+};
 
 class SecretsStub implements SecretsDep {
   readonly reads: string[] = [];
@@ -209,7 +235,10 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
   sessions.doc = liveSession(T0);
   const secrets = new SecretsStub({ MCP_TOKEN_KEY: TOKEN_KEY_RAW, ...secretValues });
   const lines: string[] = [];
-  const caches: CachesDep = { areas: createMemoryCache(10_000, clock.now) };
+  const caches: CachesDep = {
+    areas: createMemoryCache(10_000, clock.now),
+    flags: createMemoryCache(10_000, clock.now),
+  };
   const log = createLogger(
     "voice-tools",
     (line) => {
@@ -217,12 +246,17 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
     },
     clock.now,
   );
-  const crm: CrmClient = { testLine: () => Promise.resolve({ ok: false }) };
+  const crm: CrmClient = {
+    testLine: () => Promise.resolve({ ok: false }),
+    getAccount: () => Promise.reject(new Error("unexpected mock-crm GET /accounts")),
+  };
   const deps: VoiceToolsDeps = {
     now: clock.now,
     kv: undefined,
     sessions,
     crm,
+    accounts: accountsNever,
+    areas: areasNever,
     caches,
     secrets,
     log,

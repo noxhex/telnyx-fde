@@ -3,13 +3,21 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { createLogger, createMemoryCache, kvKeys, mintSessionToken, parseKey } from "@duinvezel/shared";
-import type { CreateSessionInput, CreateSessionResult, SessionDoc } from "@duinvezel/shared";
+import type {
+  CreateSessionInput,
+  CreateSessionResult,
+  SessionDoc,
+  SetVerifiedResult,
+  VerifyFailureResult,
+} from "@duinvezel/shared";
 
 import { createClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import type { ClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import { createKvFake } from "../../../packages/shared/test/fakes/kv.js";
 import type { KvFake } from "../../../packages/shared/test/fakes/kv.js";
 
+import type { AccountsClient } from "../src/clients/accounts.js";
+import type { AreasClient } from "../src/clients/areas.js";
 import type { CrmClient, LineTestOutcome, LineTestResult } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import { AREA_CACHE_TTL_MS, TIMED_OUT } from "../src/config.js";
@@ -151,7 +159,25 @@ class SessionsStub implements SessionsClient {
     this.gets.push(sid);
     return Promise.resolve(this.doc);
   }
+
+  setVerified(): Promise<SetVerifiedResult> {
+    throw new Error("unexpected SESSION.setVerified");
+  }
+
+  recordVerifyFailure(): Promise<VerifyFailureResult> {
+    throw new Error("unexpected SESSION.recordVerifyFailure");
+  }
 }
+
+/** The state-changing tools are not under test here; any call is a bug. */
+const accountsNever: AccountsClient = {
+  verify: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.verify")),
+  createTicket: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.createTicket")),
+};
+
+const areasNever: AreasClient = {
+  report: () => Promise.reject(new Error("unexpected AREA_INCIDENT.report")),
+};
 
 class SecretsStub implements SecretsDep {
   constructor(readonly values: Record<string, string | null>) {}
@@ -185,6 +211,10 @@ class CrmStub implements CrmClient {
     }
     return Promise.resolve(this.result);
   }
+
+  getAccount(): Promise<never> {
+    throw new Error("unexpected mock-crm GET /accounts");
+  }
 }
 
 // ---------- harness ----------
@@ -215,8 +245,11 @@ function makeHarness(seed: {
   const crm = new CrmStub();
   const sessions = new SessionsStub(seed.session === undefined ? makeSession() : seed.session);
   const lines: string[] = [];
-  // Production lifetime, as a literal: area statuses live 10 s in memory.
-  const caches: CachesDep = { areas: createMemoryCache(10_000, clock.now) };
+  // Production lifetimes, as literals: area statuses and flags live 10 s in memory.
+  const caches: CachesDep = {
+    areas: createMemoryCache(10_000, clock.now),
+    flags: createMemoryCache(10_000, clock.now),
+  };
   const log = createLogger(
     "voice-tools",
     (line) => {
@@ -229,6 +262,8 @@ function makeHarness(seed: {
     kv,
     sessions,
     crm,
+    accounts: accountsNever,
+    areas: areasNever,
     caches,
     secrets: new SecretsStub({ MCP_TOKEN_KEY: TOKEN_KEY_RAW }),
     log,

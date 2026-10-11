@@ -163,8 +163,12 @@ function newTicketId(): string {
  * e.g. `"2026-10-12 08:00-12:00"`. "Next" never means today, and Saturdays
  * and Sundays are skipped. Calendar arithmetic runs on the UTC-midnight
  * copy of the Brussels civil date, so DST never shifts the day count.
+ *
+ * Exported (T19): `create_ticket`'s anonymous callback path gives the
+ * caller the same window a `CustomerAccount.createTicket` would, so it uses
+ * this very helper instead of a copy.
  */
-function nextWorkingDayWindow(nowMs: number): string {
+export function nextWorkingDayWindow(nowMs: number): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: BRUSSELS_TZ,
     year: "numeric",

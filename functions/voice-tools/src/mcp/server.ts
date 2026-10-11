@@ -35,7 +35,10 @@ import type { SessionDoc, Timings } from "@duinvezel/shared";
 
 import type { VoiceToolsDeps } from "../deps.js";
 import { checkAreaStatusTool } from "./tools/check-area-status.js";
+import { createTicketTool } from "./tools/create-ticket.js";
+import { reportOutageTool } from "./tools/report-outage.js";
 import { runLineDiagnosticsTool } from "./tools/run-line-diagnostics.js";
+import { verifyAccountTool } from "./tools/verify-account.js";
 
 export const SERVER_NAME = "voice-tools";
 export const SERVER_VERSION = "0.1.0";
@@ -71,7 +74,13 @@ export interface ToolDef {
 }
 
 /** The tool list, in the card's order; tools/list serves exactly this. */
-export const TOOLS: readonly ToolDef[] = [checkAreaStatusTool, runLineDiagnosticsTool];
+export const TOOLS: readonly ToolDef[] = [
+  verifyAccountTool,
+  checkAreaStatusTool,
+  runLineDiagnosticsTool,
+  reportOutageTool,
+  createTicketTool,
+];
 
 /** Builds the server for one request, bound to the caller's session. */
 export function buildServer(context: ToolContext): Server {

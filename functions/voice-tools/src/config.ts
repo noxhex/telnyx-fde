@@ -24,10 +24,30 @@ export const TIMEOUTS = {
   areaStatusMs: 1_500,
   /** mock-crm `POST /lines/<lineId>/test`, slow on purpose (its fake waits 0.8 to 1.5 s). */
   crmLineTestMs: 5_000,
+  /** `SESSION.setVerified` and `SESSION.recordVerifyFailure` (T19). */
+  sessionSetVerifiedMs: 1_000,
+  sessionRecordVerifyFailureMs: 1_000,
+  /** `CUSTOMER_ACCOUNT.verify` and `CUSTOMER_ACCOUNT.createTicket` (T19). */
+  accountVerifyMs: 1_000,
+  accountCreateTicketMs: 1_000,
+  /** `AREA_INCIDENT.report`, which can queue behind other reporters and the actor's own alarm during an outage (T19). */
+  areaReportMs: 3_000,
+  /** The `flags/global` KV read, behind the memory cache, with the defaults on a timeout (T19). */
+  flagsMs: 1_000,
+  /** The anonymous callback write to `callback/<sid>` (T19; a KV write takes about 1.4 s — DEBUGLOG issue 11). */
+  callbackWriteMs: 2_500,
+  /** mock-crm `GET /accounts/<number>`, an estimate until T10 measures the call between functions (T19). */
+  crmAccountMs: 1_500,
 } as const;
 
 /** The per-container memory-cache lifetime for area statuses (ADR-019). */
 export const AREA_CACHE_TTL_MS = 10_000;
+
+/** The per-container memory-cache lifetime for `flags/global` (ADR-019). */
+export const FLAG_CACHE_TTL_MS = 10_000;
+
+/** An anonymous callback request lives in KV for seven days (docs/ARCHITECTURE.md, KV keys). */
+export const CALLBACK_TTL_SEC = 7 * 24 * 60 * 60;
 
 /** Sessions live two hours; the token minted for a session expires with it (T04, T18). */
 export const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
