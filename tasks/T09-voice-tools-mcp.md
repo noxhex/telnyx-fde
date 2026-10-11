@@ -39,7 +39,7 @@ Postcodes and area names come from `packages/shared/src/areas.ts`, the memory ca
 
 ## Protocol
 
-As proven in S3 and recorded in ADR-009. The server is built on the SDK's `WebStandardStreamableHTTPServerTransport` in stateless mode with JSON responses, and each POST builds a fresh server and transport pair. `initialize` answers with the version the client asked for when it is `2025-11-25`, `2025-06-18` or `2025-03-26`, and otherwise with `2025-06-18`. Notifications get 202 with no body, `ping` returns an empty result, and `tools/list` and `tools/call` serve the tools below. An unknown method is error -32601 and invalid parameters -32602. A JSON array (a batch) gets whatever the SDK answers, and a test pins it.
+As proven in S3 and recorded in ADR-009. The server is built on the SDK's `WebStandardStreamableHTTPServerTransport` in stateless mode with JSON responses, and each POST builds a fresh server and transport pair. `initialize` answers with the version the client asked for when it is `2025-11-25`, `2025-06-18` or `2025-03-26`, and otherwise with `2025-06-18`. Notifications get 202 with no body, `ping` returns an empty result, and `tools/list` and `tools/call` serve the tools below. An unknown method is error -32601, and an unknown tool or a malformed request is a JSON-RPC error too. A tool argument that fails validation is not a protocol error. It is a tool result with `isError: true` and one short sentence that names the argument and what it accepts, so the model can fix its call, the rule of the 2025-11-25 spec (Tools, Error Handling, SEP-1303). That rule came with Thiago's decision of 11 October, after this card was done, and T19's follow-up applies it to all five tools. A JSON array (a batch) gets whatever the SDK answers, and a test pins it.
 
 ## Auth
 
@@ -76,7 +76,7 @@ Every request writes one line, `/healthz`, 404s and auth failures included (AGEN
 ## Acceptance
 
 - [ ] `npm run check` passes.
-- [ ] Protocol tests cover version negotiation (the three versions echoed, `2024-11-05` and an unknown version answered with `2025-06-18`), a notification returning 202 with no body, `ping`, `tools/list` returning the two tools in order with input schemas, an unknown method, invalid parameters, a batch, `GET /mcp` and an unknown path.
+- [ ] Protocol tests cover version negotiation (the three versions echoed, `2024-11-05` and an unknown version answered with `2025-06-18`), a notification returning 202 with no body, `ping`, `tools/list` returning the two tools in order with input schemas, an unknown method, invalid parameters, a batch, `GET /mcp` and an unknown path. Since 11 October an invalid argument is a tool result with `isError`, not -32602 (Protocol, above, and T19's follow-up).
 - [ ] Auth tests cover no token, a bad signature, an expired token, a missing session and an expired session, all returning 401 with no state access beyond the session read, and a failed or held session read and an unreadable `MCP_TOKEN_KEY` returning 503.
 - [ ] Tool tests cover `check_area_status` for an outage, a quiet area, a missing key, a postcode outside the five with no KV read and a failed read, and `run_line_diagnostics` for `attested` and `verified`, `number_match`, a session without a line id, a mock-crm failure and a held call timing out at 5,000 ms.
 - [ ] `/internal/sessions` tests cover no key and a wrong key (401, no actor call), an invalid body (400), and a valid body creating the session with `traceId` `"internal-<sid>"` and returning a token that verifies.
