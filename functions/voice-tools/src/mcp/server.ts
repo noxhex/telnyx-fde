@@ -82,6 +82,27 @@ export const TOOLS: readonly ToolDef[] = [
   createTicketTool,
 ];
 
+/**
+ * One short sentence for an arguments validation failure, naming the first
+ * failing argument and what it accepts (the card's Invalid arguments rule).
+ * Schema messages are written as predicates ("must be ..."), so "<field>
+ * <message>." reads naturally; an argument the tool does not define is
+ * named by itself. The sentence ends in a full stop.
+ */
+function invalidInputSentence(tool: string, error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (issue === undefined) {
+    return `The arguments for ${tool} are not valid.`;
+  }
+  if (issue.code === "unrecognized_keys") {
+    const keys = (issue as { keys?: unknown[] }).keys ?? [];
+    return `${String(keys[0] ?? "argument")} is not an argument of ${tool}.`;
+  }
+  const field = issue.path.map(String).join(".");
+  const message = issue.message.replace(/\.$/, "");
+  return field.length > 0 ? `${field} ${message}.` : `${tool}: ${message}.`;
+}
+
 /** Builds the server for one request, bound to the caller's session. */
 export function buildServer(context: ToolContext): Server {
   const server = new Server(
@@ -117,12 +138,16 @@ export function buildServer(context: ToolContext): Server {
     }
     const parsed = tool.inputSchema.safeParse(request.params.arguments ?? {});
     if (!parsed.success) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Invalid arguments for ${tool.name}: ${parsed.error.issues
-          .map((issue) => issue.message)
-          .join("; ")}`,
-      );
+      // Invalid arguments are a tool execution error (the card's Invalid
+      // arguments rule, SEP-1303 in the 2025-11-25 spec): an isError result
+      // with one sentence naming the argument, so the model fixes its call
+      // — a JSON-RPC error bought nothing and, as S4 showed, can crash the
+      // call (DEBUGLOG issue 13). An unknown tool above stays a JSON-RPC
+      // error, and so does a malformed request (the SDK's own parsing).
+      return {
+        content: [{ type: "text", text: invalidInputSentence(tool.name, parsed.error) }],
+        isError: true,
+      };
     }
     return tool.handle(context, parsed.data);
   });

@@ -292,7 +292,7 @@ describe("MCP framing", () => {
     });
   });
 
-  it("invalid parameters are error -32602 (bad postcode)", async () => {
+  it("invalid arguments are an isError tool result naming the argument (bad postcode)", async () => {
     const h = makeHarness();
     const res = await h.post({
       jsonrpc: "2.0",
@@ -302,14 +302,41 @@ describe("MCP framing", () => {
     });
     expect(res.status).toBe(200);
     expect(JSON.parse(res.text)).toEqual({
+      result: {
+        content: [{ type: "text", text: "postcode must be exactly four digits." }],
+        isError: true,
+      },
       jsonrpc: "2.0",
       id: 3,
-      error: {
-        code: -32602,
-        message:
-          "MCP error -32602: Invalid arguments for check_area_status: postcode must be exactly four digits",
-      },
     });
+    // An isError result keeps the mcp log line at outcome error.
+    expect(h.lastLog()).toMatchObject({
+      event: "mcp",
+      method: "tools/call",
+      tool: "check_area_status",
+      outcome: "error",
+      status: 200,
+    });
+  });
+
+  it("an argument a tool does not take is an isError result naming it", async () => {
+    const h = makeHarness();
+    const res = await h.post({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: { name: "run_line_diagnostics", arguments: { line_id: "LN-000002" } },
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.text)).toEqual({
+      result: {
+        content: [{ type: "text", text: "line_id is not an argument of run_line_diagnostics." }],
+        isError: true,
+      },
+      jsonrpc: "2.0",
+      id: 8,
+    });
+    expect(h.lastLog()).toMatchObject({ outcome: "error", tool: "run_line_diagnostics" });
   });
 
   it("an unknown tool is error -32602", async () => {
@@ -387,12 +414,18 @@ describe("tools/list", () => {
     expect(verify?.inputSchema).toMatchObject({
       type: "object",
       properties: {
-        postcode: { type: "string", pattern: "^\\d{4}$" },
-        account_number: { type: "string" },
+        postcode: { type: "string", maxLength: 32 },
+        account_number: { type: "string", maxLength: 32 },
       },
       required: ["postcode"],
       additionalProperties: false,
     });
+    // The schema checks no format, so a spoken form reaches the cleaning;
+    // the descriptions give the expected format instead.
+    expect((verify?.inputSchema.properties as Record<string, { description?: string }>)
+      .postcode?.description).toContain("four digits");
+    expect((verify?.inputSchema.properties as Record<string, { description?: string }>)
+      .account_number?.description).toContain("DV-");
     expect(area?.inputSchema).toMatchObject({
       type: "object",
       properties: { postcode: { type: "string", pattern: "^\\d{4}$" } },

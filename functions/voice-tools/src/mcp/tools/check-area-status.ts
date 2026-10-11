@@ -17,8 +17,10 @@ import { areaNameForPostcode } from "@duinvezel/shared";
 import { readAreaStatus } from "../../area-status.js";
 import type { ToolContext } from "../server.js";
 
-export const checkAreaStatusInput = z.object({
-  postcode: z.string().regex(/^\d{4}$/, "postcode must be exactly four digits"),
+export const checkAreaStatusInput = z.strictObject({
+  postcode: z
+    .string({ error: "must be a string" })
+    .regex(/^\d{4}$/, "must be exactly four digits"),
 });
 
 export const CHECK_AREA_STATUS_NAME = "check_area_status";

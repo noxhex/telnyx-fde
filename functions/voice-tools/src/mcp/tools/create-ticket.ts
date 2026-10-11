@@ -29,9 +29,11 @@ import { nextWorkingDayWindow } from "../../actors/customer-account.js";
 import { CALLBACK_TTL_SEC, TIMED_OUT, TIMEOUTS } from "../../config.js";
 import type { ToolContext, ToolResult } from "../server.js";
 
-export const createTicketInput = z.object({
-  category: z.enum(["repair_visit", "callback", "other"]),
-  summary: z.string().max(300, "summary must be at most 300 characters"),
+export const createTicketInput = z.strictObject({
+  category: z.enum(["repair_visit", "callback", "other"], {
+    error: "must be one of repair_visit, callback or other",
+  }),
+  summary: z.string({ error: "must be a string" }).max(300, "must be at most 300 characters"),
 });
 
 export const CREATE_TICKET_NAME = "create_ticket";

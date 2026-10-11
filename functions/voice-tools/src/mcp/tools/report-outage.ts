@@ -22,8 +22,10 @@ import { TIMED_OUT, TIMEOUTS } from "../../config.js";
 import { readFlags } from "../../flags.js";
 import type { ToolContext, ToolResult } from "../server.js";
 
-export const reportOutageInput = z.object({
-  symptom: z.enum(["no_connection", "slow", "intermittent", "other"]),
+export const reportOutageInput = z.strictObject({
+  symptom: z.enum(["no_connection", "slow", "intermittent", "other"], {
+    error: "must be one of no_connection, slow, intermittent or other",
+  }),
 });
 
 export const REPORT_OUTAGE_NAME = "report_outage";

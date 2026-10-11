@@ -17,7 +17,7 @@ import { z } from "zod";
 import { TIMEOUTS, TIMED_OUT } from "../../config.js";
 import type { ToolContext } from "../server.js";
 
-export const runLineDiagnosticsInput = z.object({});
+export const runLineDiagnosticsInput = z.strictObject({});
 
 export const RUN_LINE_DIAGNOSTICS_NAME = "run_line_diagnostics";
 

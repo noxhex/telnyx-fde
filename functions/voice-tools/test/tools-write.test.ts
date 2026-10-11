@@ -752,6 +752,160 @@ describe("verify_account timeouts", () => {
   });
 });
 
+describe("verify_account: the attempt that locks the account", () => {
+  it.each([
+    { msLeft: 867_000, minutes: 15 }, // 14 minutes 27 s left on the new lock: 15 whole minutes.
+    { msLeft: 200_000, minutes: 4 }, // 3 minutes 20 s left: the minutes come from the lock end, never an assumed 15.
+  ])(
+    "a wrong answer carrying a lock with $msLeft ms left answers locked_minutes $minutes",
+    async ({ msLeft, minutes }) => {
+      const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+      h.accounts.verifyResult = { outcome: "wrong", attemptsLeft: 0, lockedUntil: T0 + msLeft };
+      const answer = await h.callTool("verify_account", { postcode: "8600" });
+      expect(answer.result).toEqual({ verified: false, locked: true, locked_minutes: minutes });
+      expect(h.sessions.verified).toEqual([]);
+    },
+  );
+
+  it("a wrong answer below the limit, with no lock end, still answers attempts_left", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    h.accounts.verifyResult = { outcome: "wrong", attemptsLeft: 1, lockedUntil: null };
+    const answer = await h.callTool("verify_account", { postcode: "8600" });
+    expect(answer.result).toEqual({ verified: false, attempts_left: 1 });
+  });
+});
+
+describe("verify_account spoken forms", () => {
+  /** mock-crm's DV-100001 fixture shape. */
+  const ACCOUNT_100001: CrmAccount = {
+    accountNumber: "DV-100001",
+    firstName: "Thiago",
+    postcode: "8630",
+    lineId: "LN-000001",
+  };
+
+  it.each(["dv-100001", "DV 100001", "DV100001", "DV.100.001", "100001"])(
+    "the spoken form %s reaches the CRM, the actor and the session as DV-100001",
+    async (spoken) => {
+      const h = makeHarness({
+        session: makeSession({ identity: "anonymous", accountNumber: null, postcode: null, lineId: null }),
+      });
+      h.crm.accountOutcome = { kind: "found", account: ACCOUNT_100001 };
+      const answer = await h.callTool("verify_account", {
+        postcode: "8630",
+        account_number: spoken,
+      });
+      expect(answer.result).toEqual({
+        verified: true,
+        first_name: "Thiago",
+        area_name: "Veurne",
+        area_outage: false,
+        outage_eta: null,
+      });
+      expect(h.crm.accountCalls).toEqual(["DV-100001"]);
+      expect(h.accounts.verifies).toHaveLength(1);
+      expect(h.accounts.verifies[0]?.accountNumber).toBe("DV-100001");
+      expect(h.accounts.verifies[0]?.input.mode).toBe("full");
+      expect(h.accounts.verifies[0]?.input.submitted).toEqual({
+        postcode: "8630",
+        accountNumber: "DV-100001",
+      });
+      expect(h.sessions.verified[0]?.input.accountNumber).toBe("DV-100001");
+    },
+  );
+
+  it("a five-digit number answers account_number_unclear with no call and nothing counted", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "anonymous", accountNumber: null, postcode: null, lineId: null }),
+    });
+    const answer = await h.callTool("verify_account", {
+      postcode: "8630",
+      account_number: "10001",
+    });
+    expect(answer.result).toEqual({ verified: false, account_number_unclear: true });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
+    expect(h.sessions.failures).toEqual([]);
+    expect(h.sessions.verified).toEqual([]);
+    expect(kvCalls(h)).toEqual([]);
+    // A normal result, not an error: the model asks the caller to repeat it.
+    expect(answer.logLine).toMatchObject({ outcome: "ok" });
+  });
+
+  it.each(["10 50", "B-1050"])(
+    "the spoken postcode %s reaches the actor and the session as 1050",
+    async (spoken) => {
+      const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+      h.crm.accountOutcome = {
+        kind: "found",
+        account: { accountNumber: "DV-100002", firstName: "Marie", postcode: "1050", lineId: "LN-000002" },
+      };
+      const answer = await h.callTool("verify_account", { postcode: spoken });
+      expect(answer.result).toMatchObject({ verified: true });
+      expect(h.accounts.verifies[0]?.input.mode).toBe("postcode");
+      expect(h.accounts.verifies[0]?.input.submitted).toEqual({ postcode: "1050" });
+      expect(h.sessions.verified[0]?.input.postcode).toBe("1050");
+    },
+  );
+
+  it("a postcode that does not clean to four digits answers postcode_unclear with nothing counted", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    const answer = await h.callTool("verify_account", { postcode: "86 3" });
+    expect(answer.result).toEqual({ verified: false, postcode_unclear: true });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
+    expect(h.sessions.failures).toEqual([]);
+    expect(kvCalls(h)).toEqual([]);
+    expect(answer.logLine).toMatchObject({ outcome: "ok" });
+  });
+
+  it("the session lock still refuses before any cleaning, call or counting", async () => {
+    const h = makeHarness({
+      session: makeSession({ verify: { failures: 0, lockedUntil: T0 + 840_000 } }),
+    });
+    const answer = await h.callTool("verify_account", {
+      postcode: "nonsense",
+      account_number: "also nonsense",
+    });
+    expect(answer.result).toEqual({ verified: false, locked: true, locked_minutes: 14 });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
+  });
+});
+
+// ---------- invalid arguments (SEP-1303) ----------
+
+describe("invalid arguments are isError results naming the argument", () => {
+  it("verify_account: a 33-character postcode names postcode", async () => {
+    const h = makeHarness({});
+    const answer = await h.callTool("verify_account", { postcode: "8".repeat(33) });
+    expect(answer.isErrorText).toBe("postcode must be at most 32 characters.");
+    expect(answer.result).toBeNull();
+    expect(answer.rpcError).toBeNull();
+    expect(answer.logLine).toMatchObject({ outcome: "error", tool: "verify_account" });
+    expect(h.crm.accountCalls).toEqual([]);
+  });
+
+  it("report_outage: an unknown symptom names symptom, in the card's own words", async () => {
+    const h = makeHarness({});
+    const answer = await h.callTool("report_outage", { symptom: "on_fire" });
+    expect(answer.isErrorText).toBe(
+      "symptom must be one of no_connection, slow, intermittent or other.",
+    );
+    expect(answer.logLine).toMatchObject({ outcome: "error", tool: "report_outage" });
+    expect(h.areas.reports).toEqual([]);
+    expect(flagsGets(h)).toBe(0);
+  });
+
+  it("create_ticket: an unknown category names category", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "verified" }) });
+    const answer = await h.callTool("create_ticket", { category: "urgent", summary: "Help." });
+    expect(answer.isErrorText).toBe("category must be one of repair_visit, callback or other.");
+    expect(answer.logLine).toMatchObject({ outcome: "error", tool: "create_ticket" });
+    expect(h.accounts.tickets).toEqual([]);
+  });
+});
+
 // ---------- report_outage ----------
 
 describe("report_outage", () => {
@@ -1047,7 +1201,7 @@ describe("create_ticket", () => {
     expect(h.accounts.tickets).toEqual([]);
   });
 
-  it("the summary boundary: exactly 300 characters runs, 301 is an invalid-params error", async () => {
+  it("the summary boundary: exactly 300 characters runs, 301 is an isError result naming the argument", async () => {
     const h = makeHarness({ session: makeSession({ identity: "verified" }) });
     const atLimit = await h.callTool("create_ticket", {
       category: "repair_visit",
@@ -1060,9 +1214,10 @@ describe("create_ticket", () => {
       category: "repair_visit",
       summary: "x".repeat(301),
     });
-    expect(pastLimit.rpcError).not.toBeNull();
-    expect(pastLimit.rpcError?.code).toBe(-32602);
+    expect(pastLimit.rpcError).toBeNull();
+    expect(pastLimit.isErrorText).toBe("summary must be at most 300 characters.");
     expect(pastLimit.result).toBeNull();
+    expect(pastLimit.logLine).toMatchObject({ outcome: "error", tool: "create_ticket" });
     expect(h.accounts.tickets).toHaveLength(1);
   });
 
