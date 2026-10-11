@@ -51,7 +51,12 @@ Record both next to S1's numbers in `DEBUGLOG.md`, with the times of day, and sa
 
 ## `scripts/smoke.sh` (agent)
 
-The script reads the function URLs from `infra/ids.json` and the internal key from `DUINVEZEL_INTERNAL_KEY`. It prints one pass or fail line per check and exits non-zero if anything fails.
+The agent writes `scripts/smoke.sh` and nothing else. It is a bash script, run by Thiago from the repo root, with `curl` and `jq`. It reads the function URLs from `infra/ids.json` and the internal key from `DUINVEZEL_INTERNAL_KEY`, and stops with a clear message before any request when the key is not set. It prints one pass or fail line per check, runs every check even after one fails, and exits non-zero if anything failed.
+
+- The internal key goes in the `x-internal-key` header, on mock-crm, on `/internal/sessions` and on `/internal/health`.
+- Every `POST /mcp` sends `Content-Type: application/json` and `Accept: application/json, text/event-stream`, or the SDK answers 406 (DEBUGLOG, S3 findings). `POST /internal/sessions` with the body `{"identity":"anonymous"}` answers `{ token, sid }`, and the token goes in `Authorization: Bearer`.
+- `GET /internal/health` answers `{ ok, checks }`, where `checks` holds `kv`, `crm`, `customer_account` and `session`, each with `ok` and `latency_ms`. It answers 503 when any check fails.
+- The script never prints the internal key or the token, and never runs with `set -x`.
 
 | Check | Expected |
 |---|---|
