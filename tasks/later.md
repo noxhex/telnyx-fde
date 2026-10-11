@@ -8,6 +8,8 @@ These get written in full once the spikes have answered their questions, because
 
 It manages the integration secret `mcp_enc_key` (from `DUINVEZEL_MCP_ENC_KEY`, the same value as the edge secret `MCP_ENC_KEY`, because a mismatch crashes a call at its first tool use, DEBUGLOG issue 13), the MCP server (type and URL per S3, credential `{{mcp_token | mcp_enc_key}}`, allowed tools), the shared tools (`log_disclosure` pointing at `voice-context /tools/disclosure`, transfer to the number in `TRANSFER_TO`, hangup), and the assistant itself. The assistant gets model `moonshotai/Kimi-K2.6`, a voice, the base instructions from `assistant/instructions/`, the dynamic variable defaults from the contract, the webhook URL with `dynamic_variables_webhook_timeout_ms` set to 4,000 (approved on 10 October, with the reasoning in `docs/ARCHITECTURE.md`, Call setup latency budget), and the `conversation_flow` from T12. It then assigns the phone number. Every create sends an `Idempotency-Key`, and every id goes into `infra/ids.json`.
 
+S2 shaped three details (DEBUGLOG, S2 findings). Every variable edge gets its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, because the portal's editor types `true` as a Boolean by default. The time-based edge on Diagnose fires only on phone calls, so the script's test call for it is a phone call. And the portal listed a custom variable only once it appeared in the assistant's text, so the script checks whether edges through the API need the same, and if they do, the base instructions mention every variable an edge reads.
+
 **Done when** running the script twice changes nothing the second time, and a test call reaches the Disclosure node.
 
 ## T12. Workflow content
@@ -19,6 +21,8 @@ It manages the integration secret `mcp_enc_key` (from `DUINVEZEL_MCP_ENC_KEY`, t
 ## T13. End-to-end path tests
 
 **Goal.** Call every path in `docs/WORKFLOW.md` (A to K) at least once, and record the trace id, the nodes the transcript shows, and the matching log lines in `docs/TEST-PLAN.md`.
+
+Path G, the time guard, is tested by phone, because browser test calls never fire a time-based edge (S2). Before the first call, check that every variable edge in the provisioned workflow has its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, since a Boolean `true` never matches the string a variable holds.
 
 **Done when** every path has a passing call with evidence, or a bug entry in `DEBUGLOG.md` and a fix.
 
@@ -44,7 +48,7 @@ After the report that crosses the threshold, the script waits about 15 seconds b
 
 Pick in this order, only once T13 and T14 are done.
 1. `subscribe_updates`, with the `AreaIncident` alarm recording a notification on resolve or at the ETA (SMS stays behind a flag, since US 10DLC registration is not possible in time).
-2. A second-line assistant ("Duinvezel Engineering") reached through an assistant edge from Handoff, with its own persona, model and tools.
+2. A second-line assistant ("Duinvezel Engineering") reached through an assistant edge from Handoff, with its own persona, model and tools. S2 left open how an edge targets another assistant, because the portal offered only Workflow node while one assistant existed, so the API reference settles it before this starts.
 3. OTLP log export to a free Grafana Cloud stack, with a dashboard for webhook latency and error rate.
 
 ## T17. README and submission

@@ -55,6 +55,8 @@ The only encrypted variable is `mcp_token`, used as the MCP server credential th
 
 Edges are listed in declaration order, which is evaluation order for variable edges.
 
+Every variable edge sets its value type explicitly, String for the `"true"` and `"false"` comparisons and Number for the duration, because the portal's editor types `true` as a Boolean by default (S2, answer 1). The provisioning script sets the types and never relies on a default. Time-based edges fire only on phone calls, not on browser test calls (S2, answer 2), so they are tested by phone.
+
 **Disclosure**
 1. default → Route call
 
@@ -231,16 +233,18 @@ Every path gets at least one real phone call before the demo. The evidence colum
 | D. Repeat caller | Third call within 24 hours | Handoff, Transfer | `repeat_caller=true` |
 | E. Webhook down | Flag `dv_force_error` | Degraded, then Handoff or End call | `dv` 500 log, defaults used |
 | F. Diagnostics switched off | Flag `diagnostics_enabled=false` | Diagnose jumps straight to Repair ticket | no `run_line_diagnostics` call |
-| G. Time guard | Stay in Diagnose past 300 s (lower it in a test version) | Handoff | duration in transcript |
+| G. Time guard | Stay in Diagnose past 300 s (lower it in a test version), on a phone call, because browser test calls never fire a time-based edge | Handoff | duration in transcript |
 | H. Lockout | Three wrong postcodes, then a second call | Locked on both calls, Handoff | `CustomerAccount.verify` returns `locked` |
 | I. Threshold crossing | `scripts/simulate-reports.ts` twice, then a live report | Incident declared once, next caller hears Outage notice | `incident_declared=true` exactly once |
-| J. Token failure | Wrong `MCP_ENC_KEY` in a test deploy | Tools missing, model offers a person | no MCP requests for the trace id |
+| J. Token failure | Wrong `MCP_ENC_KEY` in a test deploy | Telnyx's docs say the tools go missing and the model offers a person, but in S4 a browser call crashed at the first tool use (DEBUGLOG issue 13) | no MCP requests for the trace id |
 | K. Transfer fails | Invalid transfer target in a test version | Take message | `create_ticket` with category `callback` |
 
-## Open questions for spike S2
+## Answers from spike S2
 
-1. Do variable edges on a tool node work with custom dynamic variables, or only with `telnyx_last_tool_status_code`?
-2. Which literal type does a numeric comparison take, for `telnyx_conversation_duration_secs >= 300`?
-3. Does the assistant's own greeting play in addition to a speak start node, or should it be empty?
-4. Does a shared webhook tool on a tool node receive `session_id` from a dynamic variable of the same name?
-5. What does an edge targeting another assistant look like in the API (stretch, for a second-line assistant)?
+Spike S2 ran on 10 October on the assistant `spike-routing` (`assistant-4e892a8f-91c3-4503-8e2f-86afcef47a3e`). The evidence is the smoke function's runtime log, with `spike_log` POSTs at 14:00:43, 14:04:39, 14:05:24 and 14:06:18 UTC, and the assistant's Conversation History (DEBUGLOG, S2 findings).
+
+1. **Variable edges on a tool node work with custom dynamic variables.** On a browser test call with `area_outage` set to `"true"`, the call went from the speak node straight to "Outage branch", without the caller saying anything. With `repeat_caller` set to `"true"` it took "Repeat branch". The comparison is against the String `"true"`. The portal's edge editor picks the Boolean type for `true` by default, so the type has to be set.
+2. **A numeric comparison takes a Number literal.** The edge `telnyx_conversation_duration_secs >= 20`, with the value typed as Number, never fired on browser test calls. On a real phone call the same edge fired and node D said "Time branch".
+3. **A speak start node replaces the assistant's greeting.** The greeting, set to the words "greeting field", did not play. Only the speak node's line did.
+4. **A shared webhook tool on a tool node receives `session_id` from the dynamic variable of the same name.** Every `spike_log` POST carried `abc123`, the variable's default.
+5. **An edge to another assistant is still open.** The edge editor's Target Type menu listed only Workflow node, but `spike-routing` was the only assistant in the account then, so an assistant target may appear only once a second one exists. The API reference settles it before T16.

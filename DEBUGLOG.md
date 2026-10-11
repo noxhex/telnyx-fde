@@ -369,6 +369,35 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 
 **`dynamic_variables_webhook_timeout_ms` is 4,000 ms, approved by Thiago on 10 October.** The card's rule takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. On the current T08 design the slowest call setup is a CRM cache miss after a pause. Its flags read (0.9 s), CRM cache read (0.9 s) and mock-crm call (about 1.2 s, an estimate, because S1 did not measure a call between functions) run one after another, followed by the slowest of the parallel steps, the 1.8 s session write. That is about 4.8 s, which times 1.5 is 7.3 s, so the 4,000 ms cap applies, and T08's budgets have to change to fit under it. They did, in ADR-019 and the budget in `docs/ARCHITECTURE.md`.
 
+## S2 findings
+
+**Date** 10 Oct 2026 · **Area** AI Assistants, conversation workflow
+
+**Setup.** As in the S2 card, on the assistant `spike-routing` (`assistant-4e892a8f-91c3-4503-8e2f-86afcef47a3e`). A speak start node led to a tool node with the shared webhook tool `spike_log`, which posts `session_id` to the smoke function, and the tool node's edges led to prompt nodes A to D.
+
+**Evidence.** The smoke function's runtime log has a `spike_log` POST with `session_id` `abc123` at 14:00:43, 14:04:39, 14:05:24 and 14:06:18 UTC. The calls are in the Conversation History of `spike-routing`.
+
+**Calls.** Calls 1 to 3 were browser test calls from the portal, channel `web_call`.
+
+- Call 1, with `area_outage` `"true"`, went from the speak node straight to "Outage branch" without the caller saying anything.
+- Call 2, with `repeat_caller` `"true"`, gave "Repeat branch".
+- Call 3, with both `"false"`, gave "Default branch". The edge `telnyx_conversation_duration_secs >= 20`, typed Number, never fired on the browser calls.
+- On a real phone call to the account's US number the same edge fired, and node D said "Time branch".
+- The assistant's greeting, "greeting field", never played. Only the speak node's line did.
+
+The answers are at the end of `docs/WORKFLOW.md`, and ADR-010 is accepted.
+
+**Portal findings.**
+
+- The edge editor and the Dynamic Variables section list only the custom variables that appear in the assistant's text. Thiago referenced `area_outage`, `repeat_caller` and `session_id` in the instructions to make them selectable.
+- The edge editor types the value `true` as a Boolean by default, so a comparison with the variable's string needs the String type set by hand.
+- The defaults field warns that JSON-like values such as `true` are stored as plain strings.
+- The Blank Workflow template starts with a prompt node whose type cannot be changed. Thiago added a speak node and set it as Start, and its edge came out as a default edge.
+- The edge editor's Target Type menu listed only Workflow node, while `spike-routing` was the only assistant in the account.
+- The phone number hung up instantly until it was attached to the assistant's application (`ai-assistant-<id>`), and for a few minutes after that, then worked. Browser test calls worked right away.
+
+**Design impact.** Time-based edges are tested by phone (`docs/WORKFLOW.md`, path G, and T13), and the provisioning script sets every edge's value type explicitly (T11).
+
 ## S3 findings
 
 **Date** 10 Oct 2026 · **Area** Edge Compute, MCP transport

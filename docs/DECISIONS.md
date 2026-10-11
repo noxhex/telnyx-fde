@@ -98,13 +98,15 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-010. Route on a tool node right after the disclosure
 
-**Status.** Pending (spike S2)
+**Status.** Accepted, 10 October, after spike S2.
+
+**Evidence.** DEBUGLOG S2 findings, and the answers at the end of `docs/WORKFLOW.md`.
 
 **Context.** A speak node must have exactly one default edge, so routing has to happen in the next node. On calls, variable edges on a prompt node are evaluated before each model turn. If that turn waits for the caller to speak, routing would stall until they say something, and coming back to that node later would fire the same edges again. S2 checks how this behaves in practice.
 
 **Decision.** The disclosure speak node leads to a Route call tool node. Its shared webhook tool records that the disclosure played, and its variable edges route on the call setup variables, followed by one default edge.
 
-**Consequences.** Routing happens immediately after the disclosure, runs exactly once per call, and leaves an audit record that the disclosure was delivered.
+**Consequences.** Routing happens immediately after the disclosure, runs exactly once per call, and leaves an audit record that the disclosure was delivered. In S2 the tool node routed on custom string variables straight after the speak node, with no caller turn. Its edges compare against the String `"true"`, so provisioning sets every value type explicitly, and the time-based edge on Diagnose fires only on phone calls, so it is tested by phone.
 
 ## ADR-011. Variable edges for facts, LLM edges for intent
 

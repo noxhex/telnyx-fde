@@ -55,7 +55,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | Card | Title | Depends on | Status |
 |---|---|---|---|
 | S1 | Latency and cold start | none | done |
-| S2 | Workflow routing on a tool node | none | todo |
+| S2 | Workflow routing on a tool node | none | done |
 | S3 | MCP transport in the edge runtime | none | done |
 | S4 | Per-call token round trip | S2, S3 | done |
 | T01 | Repo scaffold and workspace bundling | none | done |

@@ -43,3 +43,7 @@ For question 5 (an edge to another assistant), check the Assistants API referenc
 - The open questions in `docs/WORKFLOW.md` are replaced by answers, each with the evidence (log line or call time).
 - ADR-010 is marked Accepted, or rewritten if routing on a tool node does not work. The fallback is a prompt node router whose instructions make the model call the transition immediately.
 - Anything surprising goes into `DEBUGLOG.md`.
+
+## Result
+
+Done on 10 October, on `spike-routing`. Variable edges on the tool node routed on custom string variables straight after the speak node, the shared webhook tool received `session_id`, and a speak start node replaced the greeting. The time-based edge fired only on a phone call, not on browser test calls, and the edge editor types `true` as a Boolean unless told otherwise. The answers are in `docs/WORKFLOW.md`, the findings in `DEBUGLOG.md` (S2 findings), and ADR-010 is accepted. Question 5, an edge to another assistant, is settled from the API reference before T16.
