@@ -270,6 +270,8 @@ test/area-incident.test.ts(1089,1): error TS1005: '}' expected.
 
 **Design impact.** None. `CLAUDE.md` already stops on 10039, and `card.sh` printed the stop message. An interrupted run is recorded but does not count as a failed attempt.
 
+**A second stop, 10 Oct 2026.** The same error stopped T09's first run at 20:39 UTC, after 8m07s, so a daily cap was still in force that evening. The run had written eight source files and installed the SDK, and the check did not compile. Claude Code stopped without a second try. Inference came back with the daily reset at 00:00 UTC on 11 October, and the retry continued the same session with feedback that listed the files that existed and the ones still missing.
+
 ## 11. KV calls from a function take about a second
 
 **Date** 10 Oct 2026 · **Area** Edge Compute, KV

@@ -19,6 +19,19 @@ type = "Session"
 [storage.kv.KV]
 id = "504d09fa-a57f-4d70-b134-6b97ea537ae1"
 
+[[secrets]]
+binding = "MCP_TOKEN_KEY"
+name = "MCP_TOKEN_KEY"
+
+[[secrets]]
+binding = "INTERNAL_KEY"
+name = "INTERNAL_KEY"
+
+# mock-crm's invoke URL (infra/ids.json), for the line test behind
+# run_line_diagnostics (and T19's account fetch).
+[env_vars]
+CRM_URL = "https://mock-crm-26584f2f-d.telnyxcompute.com"
+
 [edge_compute]
 func_id = "11c54a81-062d-4412-bfe6-bf93c10cbe32"
 func_name = "voice-tools"
