@@ -71,7 +71,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
 | T12 | Workflow content | T19 | done |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | written |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, script accepted, Thiago provisions and makes the first calls |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | written |
 | T13 | End-to-end path tests | T12 | outline |
 | T14 | Canary actor and alert | T10 | outline |

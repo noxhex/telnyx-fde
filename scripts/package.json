@@ -1,0 +1,13 @@
+{
+  "name": "@duinvezel/scripts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Provisioning script for the Telnyx side of the assistant (card T11). Erasable TypeScript, run by Node 26 with no build step.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}

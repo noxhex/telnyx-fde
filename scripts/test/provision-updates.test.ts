@@ -1,0 +1,224 @@
+/**
+ * Updates: a changed edge order, a changed instruction file, a changed
+ * `allowed_tools`, a recording found off and a number found elsewhere each
+ * count as a difference, and the update carries only the managed fields.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import { buildConversationFlow } from "../../assistant/flow.ts";
+import type { FlowEdge, Instructions, ToolIds } from "../../assistant/flow.ts";
+import { loadInstructions } from "../../assistant/instructions.ts";
+import { ManualTimeouts } from "./manual-timeout.ts";
+import { FakeApi, makeDeps } from "./fake-api.ts";
+import type { ProvisionDeps } from "../provision/run.ts";
+import { provision } from "../provision/run.ts";
+
+const MANAGED_ASSISTANT_FIELDS = [
+  "name",
+  "model",
+  "instructions",
+  "enabled_features",
+  "greeting",
+  "voice_settings",
+  "dynamic_variables",
+  "dynamic_variables_webhook_url",
+  "dynamic_variables_webhook_timeout_ms",
+  "mcp_servers",
+  "tool_ids",
+  "conversation_flow",
+];
+
+/** Runs a first provision, then a second one with the overrides; returns the second run's requests and deps. */
+async function runTwice(
+  api: FakeApi,
+  overrides?: Partial<ProvisionDeps>,
+): Promise<{ requests: ReturnType<typeof api.requests.slice>; lines: string[] }> {
+  await provision(makeDeps({ api, timeoutRunner: new ManualTimeouts().runner }));
+  const before = api.requests.length;
+  const second = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides });
+  await provision(second);
+  return { requests: api.requests.slice(before), lines: second.lines };
+}
+
+describe("a changed desired state", () => {
+  it("counts a changed edge order as a difference in conversation_flow", async () => {
+    const swapped = (args: { toolIds: ToolIds; instructions: Instructions }) => {
+      const flow = buildConversationFlow(args);
+      const edges: FlowEdge[] = [...flow.edges];
+      const first = edges[0];
+      const second = edges[1];
+      if (first === undefined || second === undefined) {
+        throw new Error("the flow has fewer than two edges");
+      }
+      edges[0] = second;
+      edges[1] = first;
+      return { ...flow, edges };
+    };
+    const { requests, lines } = await runTwice(new FakeApi(), { buildFlow: swapped });
+
+    const updates = requests.filter(
+      (r) => r.method === "POST" && r.path === "/ai/assistants/assistant-0001-uuid",
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.method).toBe("POST");
+    expect(lines).toContain("assistant Duinvezel Support (assistant-0001-uuid): updated (conversation_flow)");
+
+    const body = updates[0]?.body as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual([...MANAGED_ASSISTANT_FIELDS].sort());
+    expect("telephony_settings" in body).toBe(false);
+    const flow = body["conversation_flow"] as { edges: FlowEdge[] };
+    expect(flow.edges.slice(0, 2).map((edge) => edge.id)).toEqual([
+      "e_route_session_ok",
+      "e_disclosure_default",
+    ]);
+  });
+
+  it("sends one assistant update with only the managed fields on a changed instruction file, and names instructions", async () => {
+    const instructions = { ...loadInstructions(), base: "Changed base instructions." };
+    const { requests, lines } = await runTwice(new FakeApi(), { instructions });
+
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /ai/assistants/assistant-0001-uuid"]);
+    expect(lines).toContain("assistant Duinvezel Support (assistant-0001-uuid): updated (instructions)");
+
+    const body = writes[0]?.body as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual([...MANAGED_ASSISTANT_FIELDS].sort());
+    expect(body["instructions"]).toBe("Changed base instructions.");
+  });
+
+  it("counts a changed allowed_tools on the server and on the assistant", async () => {
+    const allowedTools = ["verify_account", "report_outage"];
+    const { requests, lines } = await runTwice(new FakeApi(), { allowedTools });
+
+    const puts = requests.filter((r) => r.method === "PUT");
+    expect(puts.map((r) => r.path)).toEqual(["/ai/mcp_servers/mcp-server-0001-uuid"]);
+    expect(puts[0]?.body).toEqual({
+      name: "duinvezel-voice-tools",
+      type: "http",
+      url: "https://voice-tools-11c54a81-0.telnyxcompute.com/mcp",
+      api_key_ref: "{{mcp_token | mcp_enc_key}}",
+      allowed_tools: ["verify_account", "report_outage"],
+    });
+    expect(lines).toContain("mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): updated (allowed_tools)");
+
+    const updates = requests.filter(
+      (r) => r.method === "POST" && r.path === "/ai/assistants/assistant-0001-uuid",
+    );
+    expect(updates).toHaveLength(1);
+    expect(lines).toContain("assistant Duinvezel Support (assistant-0001-uuid): updated (mcp_servers)");
+    expect((updates[0]?.body as Record<string, unknown>)["mcp_servers"]).toEqual([
+      { id: "mcp-server-0001-uuid", allowed_tools: ["verify_account", "report_outage"] },
+    ]);
+  });
+
+  it("sends telephony_settings as read with only recording_settings.enabled changed when a read finds recording off", async () => {
+    const api = new FakeApi();
+    await provision(makeDeps({ api, timeoutRunner: new ManualTimeouts().runner }));
+    const assistant = api.assistants[0];
+    if (assistant === undefined) {
+      throw new Error("the first run created no assistant");
+    }
+    assistant.telephony_settings = {
+      default_texml_app_id: "app-for-assistant-0001-uuid",
+      supports_unauthenticated_web_calls: false,
+      recording_settings: { enabled: false, channels: "single", format: "wav", stop_on_conversation_end: true },
+    };
+
+    const before = api.requests.length;
+    await provision(makeDeps({ api, timeoutRunner: new ManualTimeouts().runner }));
+    const requests = api.requests.slice(before);
+
+    const updates = requests.filter(
+      (r) => r.method === "POST" && r.path === "/ai/assistants/assistant-0001-uuid",
+    );
+    expect(updates).toHaveLength(1);
+    const body = updates[0]?.body as Record<string, unknown>;
+    expect(body["telephony_settings"]).toEqual({
+      default_texml_app_id: "app-for-assistant-0001-uuid",
+      supports_unauthenticated_web_calls: false,
+      recording_settings: { enabled: true, channels: "single", format: "wav", stop_on_conversation_end: true },
+    });
+    expect(api.assistants[0]?.telephony_settings).toEqual(body["telephony_settings"]);
+  });
+});
+
+describe("the tools the script does not own", () => {
+  it("gets no request to any of the five existing tools' ids", async () => {
+    const api = new FakeApi();
+    const existing = [
+      { id: "existing-spike-log", display_name: "spike_log", type: "webhook" },
+      { id: "existing-default-transfer", display_name: "Default transfer", type: "transfer" },
+      { id: "existing-take-message", display_name: "take-message", type: "webhook" },
+      { id: "existing-get-weather", display_name: "get-weather", type: "webhook" },
+      { id: "existing-default-hangup", display_name: "Default hangup", type: "hangup" },
+    ];
+    for (const tool of existing) {
+      api.tools.push({
+        id: tool.id,
+        body: { display_name: tool.display_name, type: tool.type, timeout_ms: 5000, [tool.type]: {} },
+      });
+    }
+
+    const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(deps);
+
+    for (const tool of existing) {
+      for (const request of api.requests) {
+        expect(request.path).not.toContain(tool.id);
+        expect(request.bodyText ?? "").not.toContain(tool.id);
+      }
+    }
+    expect(api.tools).toHaveLength(8);
+    const ourCreates = api.requests.filter((r) => r.method === "POST" && r.path === "/ai/tools");
+    expect(ourCreates).toHaveLength(3);
+    /* The assistant's tool_ids stays empty: the five stay unattached, and so do the three. */
+    const assistantCreate = api.requests.find((r) => r.method === "POST" && r.path === "/ai/assistants");
+    expect((assistantCreate?.body as Record<string, unknown>)["tool_ids"]).toEqual([]);
+  });
+});
+
+describe("the phone number", () => {
+  it("sends the plus as %2B, and one PATCH carries only connection_id when the number sits elsewhere", async () => {
+    const api = new FakeApi();
+    const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(deps);
+
+    const lookup = api.requests.find((r) => r.method === "GET" && r.path === "/phone_numbers");
+    expect(lookup?.query.get("filter[phone_number]")).toBe("+12025550143");
+    expect(lookup?.url).toContain("filter%5Bphone_number%5D=%2B12025550143");
+    expect(lookup?.url).not.toContain("+12025550143");
+
+    const patches = api.requests.filter((r) => r.method === "PATCH" && r.path.startsWith("/phone_numbers/"));
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.path).toBe("/phone_numbers/pn-0001");
+    expect(patches[0]?.body).toEqual({ connection_id: "app-for-assistant-0001-uuid" });
+    expect(deps.lines.at(-2)).toContain("the number needs a few minutes before calls go through");
+  });
+
+  it("sends a second PATCH when the number drifts back, and prints unchanged when it stays", async () => {
+    const api = new FakeApi();
+    await provision(makeDeps({ api, timeoutRunner: new ManualTimeouts().runner }));
+
+    const attached = await runTwice(api);
+    expect(attached.lines).toContain("phone_number ...0143 (pn-0001): unchanged");
+    expect(attached.requests.every((r) => r.method === "GET")).toBe(true);
+
+    const drifted = api.phoneNumbers[0];
+    if (drifted === undefined) {
+      throw new Error("no phone number in the fake");
+    }
+    drifted.connection_id = "app-of-spike-routing";
+    const before = api.requests.length;
+    const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(deps);
+    const patches = api.requests
+      .slice(before)
+      .filter((r) => r.method === "PATCH" && r.path.startsWith("/phone_numbers/"));
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.body).toEqual({ connection_id: "app-for-assistant-0001-uuid" });
+    expect(deps.lines).toContain(
+      "phone_number ...0143 (pn-0001): updated (connection_id); the number needs a few minutes before calls go through",
+    );
+  });
+});

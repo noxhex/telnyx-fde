@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/*",
     "functions/*",
-    "assistant"
+    "assistant",
+    "scripts"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit && npm run typecheck --workspaces --if-present",
