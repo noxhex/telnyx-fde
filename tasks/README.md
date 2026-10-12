@@ -70,7 +70,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T09 | voice-tools MCP server core | T04, T08, T18, S3, S4 | done |
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
-| T12 | Workflow content | T19 | written |
+| T12 | Workflow content | T19 | done |
 | T11 | Assistant provisioning script | S2, S4, T10, T12 | written |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | written |
 | T13 | End-to-end path tests | T12 | outline |
