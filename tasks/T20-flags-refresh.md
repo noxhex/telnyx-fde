@@ -23,6 +23,8 @@ The feature flags apply on the deployed functions, and only a container's first 
 
 No new dependency.
 
+Thiago may run `node scripts/provision.ts` while this card runs. It rewrites `infra/ids.json`, so leave that file alone and do not restore it.
+
 ## 1. A value that refreshes in the background
 
 `createRefreshingValue` in `packages/shared` holds one value read from KV for the life of a container. Each function makes one for its flags at module scope, next to its other caches, and each test makes a fresh one.
