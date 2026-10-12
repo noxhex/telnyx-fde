@@ -1,30 +1,12 @@
-# Cards T11 to T17 (outlines)
+# Cards T13 to T17 (outlines)
 
 These get written in full once the spikes have answered their questions, because their details depend on what S2, S3 and S4 find. Each outline already names the goal and what done looks like. `telnyx-edge dev` has no secrets, environment variables or KV namespace (DEBUGLOG issue 9), so anything keyed is checked against the deployed functions.
-
-## T11. Assistant provisioning script
-
-**Goal.** One idempotent script, `scripts/provision.ts`, that creates or updates everything on the Telnyx side from the repo, so the assistant is reproducible and reviewable.
-
-It manages the integration secret `mcp_enc_key` (from `DUINVEZEL_MCP_ENC_KEY`, the same value as the edge secret `MCP_ENC_KEY`, because a mismatch crashes a call at its first tool use, DEBUGLOG issue 13), the MCP server (type and URL per S3, credential `{{mcp_token | mcp_enc_key}}`, allowed tools), the shared tools (`log_disclosure` pointing at `voice-context /tools/disclosure`, transfer to the number in `TRANSFER_TO`, hangup), and the assistant itself. The assistant gets model `moonshotai/Kimi-K2.6`, a voice, the base instructions from `assistant/instructions/`, the dynamic variable defaults from the contract, the webhook URL with `dynamic_variables_webhook_timeout_ms` set to 4,000 (approved on 10 October, with the reasoning in `docs/ARCHITECTURE.md`, Call setup latency budget), and the `conversation_flow` from T12. It then assigns the phone number. Every create sends an `Idempotency-Key`, and every id goes into `infra/ids.json`.
-
-S2 shaped three details (DEBUGLOG, S2 findings). Every variable edge gets its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, because the portal's editor types `true` as a Boolean by default. The time-based edge on Diagnose fires only on phone calls, so the script's test call for it is a phone call. And the portal listed a custom variable only once it appeared in the assistant's text, so the script checks whether edges through the API need the same, and if they do, the base instructions mention every variable an edge reads.
-
-**Done when** running the script twice changes nothing the second time, and a test call reaches the Disclosure node.
-
-## T12. Workflow content
-
-**Goal.** `assistant/flow.ts` builds the `conversation_flow` payload from typed definitions that mirror `docs/WORKFLOW.md`, with the instructions in `assistant/instructions/*.md`.
-
-The Verify account instructions handle the two answers of `verify_account` for a misheard value, `account_number_unclear` and `postcode_unclear`, by asking the caller to repeat the account number or the postcode one character at a time. Neither answer counts as a failed attempt (T19).
-
-**Done when** a unit test checks the invariants. Every speak node has exactly one default edge, every tool node with edges has exactly one default edge, variable edges come before LLM edges, every referenced node exists, and each node's tools match the table in `docs/WORKFLOW.md`.
 
 ## T13. End-to-end path tests
 
 **Goal.** Call every path in `docs/WORKFLOW.md` (A to K) at least once, and record the trace id, the nodes the transcript shows, and the matching log lines in `docs/TEST-PLAN.md`.
 
-Path G, the time guard, is tested by phone, because browser test calls never fire a time-based edge (S2). A call with the mock-crm flag `crm_fail` set shows how Telnyx treats a tool result with `isError: true`, which every failing dependency and every invalid argument now returns (T19). That matters because S4 saw Telnyx crash a call on an MCP failure its docs said the call would survive (DEBUGLOG issue 13), so the transcript and the call's end state go into the evidence. Before the first call, check that every variable edge in the provisioned workflow has its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, since a Boolean `true` never matches the string a variable holds.
+Path G, the time guard, is tested by phone, because browser test calls never fire a time-based edge (S2). A call with the mock-crm flag `crm_fail` set shows how Telnyx treats a tool result with `isError: true`, which every failing dependency and every invalid argument now returns (T19). That matters because S4 saw Telnyx crash a call on an MCP failure its docs said the call would survive (DEBUGLOG issue 13), so the transcript and the call's end state go into the evidence. `verify_account` and `check_area_status` take a postcode or an account number sent as a JSON number (T10 follow-up of 12 October), so a call where the model sends one still verifies, and the transcripts show how often it happens. Before the first call, check that every variable edge in the provisioned workflow has its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, since a Boolean `true` never matches the string a variable holds.
 
 **Done when** every path has a passing call with evidence, or a bug entry in `DEBUGLOG.md` and a fix.
 
