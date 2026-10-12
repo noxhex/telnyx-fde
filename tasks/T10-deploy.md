@@ -75,7 +75,7 @@ The agent writes `scripts/smoke.sh` and nothing else. It is a bash script, run b
 - [ ] Ship times are recorded in `DEBUGLOG.md`.
 - [ ] The first request after each ship and voice-context's calls to KV, mock-crm and the actors are timed and recorded next to S1's numbers.
 - [ ] `infra/ids.json` is complete.
-- [ ] MCP Inspector against the deployed `/mcp`, with a token from `POST /internal/sessions` for a fixture account, lists the five tools and calls `verify_account` with the right postcode. `telnyx-edge logs voice-tools` then shows the actor's log line carrying that session's trace id, `internal-<sid>`.
+- [ ] MCP Inspector against the deployed `/mcp`, with a token from `POST /internal/sessions` for a fixture account, lists the five tools and calls `verify_account` with the right postcode. `telnyx-edge logs voice-tools` then shows the actor's log line carrying that session's trace id, `internal-<sid>`. Settled on 12 October. The actor lines are in `telnyx-edge actors logs Session` and `CustomerAccount`, not in voice-tools' log, and the platform redacts the trace id's hex there and in voice-tools' own lines (DEBUGLOG issue 16).
 
 ## Follow-up of 12 October
 
@@ -117,3 +117,7 @@ The first run of T10 found that mock-crm answered 401 to every keyed request (`D
   - `tools/list` pins the three properties exactly, `postcode` and `account_number` of `verify_account` and `postcode` of `check_area_status`, so the published schema cannot gain a number type.
 
 **Done when** `npm run check` passes with these tests. Thiago then ships mock-crm and voice-tools again, and runs the timing for mock-crm and voice-context, `scripts/smoke.sh` and the Inspector check, which close T10's acceptance.
+
+## Result
+
+Done on 12 October. After the follow-up's re-ship all 11 smoke checks passed, and the MCP Inspector listed the five tools and verified Marie's fixture account. The ships, the first requests and voice-context's calls to KV, mock-crm and the actors are in `DEBUGLOG.md` (T10 measurements), except the re-ship times, which did not reach Claude Code. The run found three problems, mock-crm's 401s (issue 14, fixed in the follow-up), flags reads that time out on every refresh (issue 15, card T20) and redacted trace ids (issue 16). The CRM timeouts stay at 1,500 ms (`docs/ARCHITECTURE.md`, Call setup latency budget).

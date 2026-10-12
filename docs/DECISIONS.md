@@ -140,7 +140,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-014. Strict routing, authentication before state
 
-**Status.** Accepted
+**Status.** Accepted. On 12 October Thiago allowed one exception for reads. mock-crm starts its two secret reads and its flags read on a container's first request of any kind, unknown paths included, once per container and without waiting for them. So its first keyed lookup waits for the slowest read instead of their sum (T20, DEBUGLOG issue 15). Nothing changes state before authentication.
 
 **Evidence.** DEBUGLOG issue 4. The sample actor function changed state on every path, including a browser's favicon request and an unexplained visitor.
 
@@ -196,7 +196,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-019. Sessions live in an actor, and hot KV reads go through memory caches
 
-**Status.** Accepted, 10 October, after spike S1.
+**Status.** Accepted, 10 October, after spike S1. On 12 October a KV read had outgrown the flags' 1,000 ms bound, so every refresh timed out and the flags never applied (DEBUGLOG issue 15). T20 makes each flags cache serve its last good value and refresh it in the background.
 
 **Evidence.** DEBUGLOG issue 11 and the S1 measurements. From inside a function a KV read takes about 0.8 s and a write about 1.4 s. An actor round trip takes 141 ms warm and about 280 ms after a pause.
 
@@ -205,3 +205,13 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 **Decision.** One `Session` actor per call, with the sid as its instance name. `voice-tools` ships the class, and `voice-context` reaches it through a shared actor binding, as with `CustomerAccount`. The actor keeps the session document (ARCHITECTURE, Actors) and creates it idempotently per sid (ADR-015). It returns null once the session has expired, marks the disclosure, sets the verified identity, and counts verification failures for account numbers that do not exist, locking verification in that session for 15 minutes after three. Its alarm deletes the state when the session expires, two hours after creation. In front of the hot KV reads each container keeps a memory cache, 10 seconds for flags and area statuses and 60 seconds for CRM lookup results. The KV CRM cache stays, because the `crm_fail` part of the demo needs it across containers.
 
 **Consequences.** A session costs one actor round trip at call setup and one per MCP call, instead of a KV write and a KV read. One call is one sequential writer, so its instance never queues. Every call leaves a short-lived instance that deletes its own state by alarm. A warm container answers most call setups from memory in about 0.2 s. In exchange, a new area status can take up to 10 seconds longer to reach callers on a warm container, and a flag change up to 10 seconds to apply. KV keeps the CRM cache, the flags, the area status read model, callback requests and the canary results.
+
+## ADR-020. Every prompt node sees the five MCP tools, and its instructions name its own
+
+**Status.** Accepted, 12 October, decided by Thiago.
+
+**Context.** `docs/WORKFLOW.md` gave each prompt node only its own tools. The API sets tools per node only for shared tools, through `shared_tool_ids` and `tools_mode` on a prompt node. Telnyx documents no way for a node to switch an MCP server's tools on or off (https://developers.telnyx.com/docs/inference/ai-assistants/workflows.md and the create-assistant reference).
+
+**Decision.** Every prompt node sees all five tools of the MCP server `duinvezel-voice-tools`, and the payload sets no per-node tool field. Each node's instructions name the tools it may use, and a node without tools names none. The server's identity checks (ADR-013) stay the gate. Transfer, hangup and the disclosure log are shared tools that run only on their tool nodes and are not attached to the assistant.
+
+**Consequences.** The model can call a tool from a node that does not name it, for example `report_outage` from Triage. At worst that is an action the step did not plan, never one on another account or above the caller's identity level. T12 tests that each node's instructions name exactly its tools, and T13's transcripts show whether the model strays.

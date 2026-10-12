@@ -6,7 +6,8 @@ This is the source of truth for the assistant's `conversation_flow`. The provisi
 
 - **Facts route through variable edges, intent through LLM edges** (ADR-011). Variable edges are listed in priority order, because the first true edge wins.
 - **Every prompt node appends** to the base instructions, except Degraded, which replaces them (ADR-012).
-- **Each node enables only its own tools.** Transfer and hangup run only as tool nodes.
+- **Each prompt node's instructions name the tools it may use** (ADR-020). Every prompt node sees all five MCP tools, because Telnyx documents no per-node limit for MCP tools, and the server's identity checks are the gate. Transfer, hangup and the disclosure log run only as tool nodes.
+- **No instruction or message carries `session_id` or `mcp_token`.**
 - **Instructions never discourage tool calls.** On calls, LLM edges fire as transition tool calls, so the base prompt tells the model to call the matching transition as soon as the caller's need is clear.
 - **Every boolean is the string `"true"` or `"false"`.**
 
@@ -35,7 +36,7 @@ The only encrypted variable is `mcp_token`, used as the MCP server credential th
 
 ## Nodes
 
-| Id | Name | Type | Tools enabled | Notes |
+| Id | Name | Type | Tools its instructions name | Notes |
 |---|---|---|---|---|
 | `n_disclosure` | Disclosure | speak | | Start node |
 | `n_route` | Route call | tool, shared webhook `log_disclosure` | | Routes on call setup variables |
@@ -148,7 +149,10 @@ Context for this call
 - Known customer {{caller_known}}, identity level {{identity_level}}
 - Area {{area_name}}, postcode {{area_code}}
 - Outage in this area {{area_outage}}, expected back {{outage_eta}}
+- Routing flags session ok {{session_ok}}, outage {{area_outage}}, repeat caller {{repeat_caller}}, needs verification {{needs_verification}}, diagnostics on {{diagnostics_enabled}}
 ```
+
+The last line names every custom variable an edge reads, and nothing else, because in S2 the portal listed a custom variable only once it appeared in the assistant's text (DEBUGLOG, S2 findings). `telnyx_conversation_duration_secs` is a system variable, and that rule covered only custom variables.
 
 ### Verify account (append)
 
@@ -168,7 +172,6 @@ In this step you confirm the caller's identity before any account work.
 ```text
 The caller is in an area with a confirmed outage, and has just heard about it.
 - Ask whether their problem matches the outage. If it does, call report_outage with the symptom that fits, so the engineers can see how many customers are affected.
-- If subscribe_updates is available, offer a text message when the service is back.
 - Keep it short. Most callers only want to know it is being fixed.
 ```
 

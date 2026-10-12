@@ -1,6 +1,6 @@
 # Task cards
 
-Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T12, T18 and T19 are written in full, T11 and T12 with open decisions at their end. Cards T13 to T17 are outlines in [later.md](later.md), detailed once the spikes have answered their questions.
+Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T12 and T18 to T20 are written in full. Cards T13 to T17 are outlines in [later.md](later.md), detailed once the spikes have answered their questions.
 
 ## The loop for one card
 
@@ -69,9 +69,10 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T08 | voice-context function | T03, T04, T05, T06, T18, S1 | done |
 | T09 | voice-tools MCP server core | T04, T08, T18, S3, S4 | done |
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
-| T10 | Deploy and smoke-test all three functions | T08, T09, T19 | in progress, follow-up for mock-crm's 401s done, mock-crm and voice-tools to ship again |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | written, open decisions |
-| T12 | Workflow content | T19 | written, open decisions |
+| T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
+| T12 | Workflow content | T19 | written |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | written |
+| T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | written |
 | T13 | End-to-end path tests | T12 | outline |
 | T14 | Canary actor and alert | T10 | outline |
 | T15 | Demo tooling (flags, simulated reports) | T10 | outline |

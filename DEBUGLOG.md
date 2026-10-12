@@ -375,6 +375,60 @@ voice-tools and voice-context read the same secrets through the same `env.SECRET
 
 **Design impact.** A secret read costs 0.55 to 0.75 s once per container, and the call setup budget in `docs/ARCHITECTURE.md` has no line for it (T10 measurements below).
 
+## 15. mock-crm's flags read timed out on every refresh
+
+**Date** 12 Oct 2026 · **Area** Edge Compute, KV
+
+**Symptom.** After the re-ship of 12 October, every flags read in mock-crm stopped at its 1,000 ms bound. So `crm_fail` and `crm_delay_ms` never applied, and once per 10-second cache lifetime a lookup took a second longer. voice-context's health check showed it as a CRM check of 1,009 to 1,032 ms on calls 1, 5 and 9, against 7 to 20 ms on the others.
+
+**Evidence.** All six keyed requests that read the flags, from 11:42:05 to 12:06:51, logged the bound as their `kv` hop. The one KV read that ran with a longer bound, `verify_account`'s area status read, took 1,149 ms.
+
+```text
+# telnyx-edge logs mock-crm --type runtime, trimmed
+[2026-10-12T11:42:05.144Z] {"route":"customers","status":200,"latency_ms":{"total":2170,"http":1167,"kv":1001}}
+[2026-10-12T11:53:24.500Z] {"route":"customers","status":200,"latency_ms":{"total":1001,"http":0,"kv":1001}}
+[2026-10-12T11:53:36.161Z] {"route":"customers","status":200,"latency_ms":{"total":1001,"http":0,"kv":1001}}
+[2026-10-12T11:53:47.783Z] {"route":"customers","status":200,"latency_ms":{"total":1001,"http":0,"kv":1000}}
+[2026-10-12T11:54:57.381Z] {"route":"customers","status":200,"latency_ms":{"total":1001,"http":0,"kv":1001}}
+[2026-10-12T12:06:51.100Z] {"route":"customers","status":200,"latency_ms":{"total":1000,"http":0,"kv":1000}}
+# telnyx-edge logs voice-tools --type runtime, trimmed, the area status read has a 1,500 ms bound
+[2026-10-12T11:55:07.594Z] {"event":"mcp","tool":"verify_account","latency_ms":{"total":1579,"http":1,"actor":392,"crm":30,"kv":1149}}
+```
+
+**Cause.** A KV read now takes longer than the 1,000 ms that all three functions give their flags read. S1 measured 668 to 941 ms (issue 11). mock-crm caches the defaults for 10 seconds after a timeout, so each refresh paid the full second and the flags never changed. voice-context and voice-tools cache nothing after a timeout, so each `/dv` and each `report_outage` would pay up to a second and get the defaults. Neither has run yet on the deployed functions, so their logs show no flags read.
+
+**Fix.** Card T20, as Thiago decided on 12 October. A flags cache serves the last good value, refreshes it in the background once its lifetime has passed, keeps a late success, and gives the defaults only until a container's first successful read. mock-crm also starts its two secret reads and its flags read together on a container's first request, so its first keyed lookup waits for the slowest read instead of their sum.
+
+**Design impact.** Flags apply one background read after a change instead of never, and only a container's first requests wait for KV (ADR-019, Status). The area status caches keep their 1,500 ms bound, which the one measured read stayed under.
+
+## 16. Actor log lines are not in the function's log, and the platform redacts trace ids
+
+**Date** 12 Oct 2026 · **Area** Edge Compute, logs
+
+**Symptom.** Eleven minutes after the MCP Inspector check, `telnyx-edge logs voice-tools --type runtime --since 1h --last 250` had no line with the session's trace id `internal-<sid>`. T10's acceptance expected the actor's log line there.
+
+**Evidence.** Claude Code read the logs on 12 October with read-only commands.
+
+- The actor lines are in the actor type's own log. `telnyx-edge actors logs Session --type runtime` has the `create` and `setVerified` lines of the Inspector's session, and `telnyx-edge actors logs CustomerAccount --type runtime` its `verify` line. voice-tools' function log has none.
+- Every trace id of the form `internal-<sid>` reads `internal-[redacted]`, in voice-tools' own lines and in the actor lines alike. The actor lines' `sid` field reads `[redacted]`. Our logger redacts by field name only (`packages/shared/src/log.ts`), and neither `trace_id` nor `sid` matches, so the platform does it. It also redacts the sidecar's address in the runtime's start line.
+- The invocation records are not redacted. `telnyx-edge actors logs Session --type invocations` names each instance by its full sid, and mock-crm's invocation log shows each `GET /customers` with the full phone number in its query.
+
+```text
+# telnyx-edge actors logs Session --type runtime, trimmed
+[2026-10-12T11:55:04.103Z] {"svc":"voice-tools","event":"actor","actor":"Session","method":"create","trace_id":"internal-[redacted]","sid":"[redacted]","outcome":"created"}
+# telnyx-edge actors logs CustomerAccount --type runtime, trimmed
+[2026-10-12T11:55:06.446Z] {"svc":"voice-tools","event":"actor","actor":"CustomerAccount","method":"verify","trace_id":"internal-[redacted]","outcome":"ok"}
+# telnyx-edge logs voice-tools --type runtime, trimmed
+[2026-10-12T11:55:07.594Z] {"event":"mcp","tool":"verify_account","trace_id":"internal-[redacted]","status":200}
+[function-runtime] listening on :8080; dapr=http://[redacted]:3500; ...
+```
+
+**Cause.** Actor methods write to the actor type's log stream, which the CLI shows under `telnyx-edge actors logs`. The platform redacts some values in runtime logs. Every 32-hex sid we logged was redacted, and so was the sidecar's address. Its rules are not documented.
+
+**Fix.** None for internal sessions. Their lines join by time and method.
+
+**Design impact.** Our runtime logs may not join a call's lines by trace id. A real call uses its call control id as trace id (`docs/ARCHITECTURE.md`, Observability), and the first real call in T11 shows whether the platform redacts that too. If it does, the trace id needs a form the platform leaves alone. Evidence for a call includes `telnyx-edge actors logs <Type>` and the call's time window (T13, T15).
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
@@ -446,7 +500,43 @@ The other functions' first calls agree. voice-tools' first `POST /internal/sessi
 - KV is slower than in S1. Put plus get took 2.47 to 2.96 s, where S1 took 1.83 to 2.40 s, and one call hit a KV timeout. The CRM cache write (2,500 ms, cut by the soft budget) and the flags and area reads (1,000 and 1,500 ms on a cache miss) have less headroom than the table assumes. The split between put and get is not measured.
 - Warm actor calls took 8 to 17 ms, far below S1's 141 ms and the table's 0.15 s. The first actor calls after the ship took 431 to 483 ms, above the 269 to 284 ms S1 saw after a pause.
 
-The table gets these numbers together with the CRM timeouts, from the timing run after the re-ship.
+**The re-ship.** After the follow-up (issue 14), Thiago shipped mock-crm (Updated At 11:41) and voice-tools (11:52) again, then ran the timing for mock-crm and voice-context, `scripts/smoke.sh` and the MCP Inspector check. voice-context was not shipped again. All 11 smoke checks passed, and the Inspector listed the five tools and verified Marie's fixture account. The ship times did not reach Claude Code, so the numbers below come from the platform logs and the health answers in `~/code/scratch/t10/run-115322/`.
+
+| Function | Probe `GET /`, server | First `/healthz`, server | Five warm `/healthz`, server |
+|---|---|---|---|
+| mock-crm | 11:41:57.089, 22 ms | 16 ms, 5.2 s after the probe | 2.2 to 3.5 ms |
+| voice-tools | 11:52:13.606, 20 ms | 17 ms, 6.0 s after the probe | 2.6 to 6.8 ms |
+
+mock-crm's first keyed request took 2,174 ms on the server. Its log line shows the two secret reads one after the other, 1,167 ms together, then the flags read stopped by its 1,000 ms bound (issue 15). The next four took 2.4 to 5.3 ms.
+
+voice-context's ten `GET /internal/health` calls ran from 11:53:23 to 11:53:52, and smoke's at 11:55:03.
+
+| Check | First call | The ten after it |
+|---|---|---|
+| KV put, then get of the same key | 2,699 ms | 2,609 to 3,118 ms, and one failure at 2,501 ms |
+| CRM lookup | 1,032 ms | 7 to 20 ms, and 1,009 ms on calls 5 and 9 |
+| `CustomerAccount.snapshot` | 49 ms | 8 to 16 ms |
+| `Session.get` | 49 ms | 7 to 15 ms |
+| Secret read, `INTERNAL_KEY` | 0 ms | 0 ms |
+
+The secret read shows 0 ms throughout, so the container that answered had read it before. The CRM checks near a second are mock-crm's flags reads hitting their bound, at 11:53:24.5, 11:53:36.2 and 11:53:47.8 in mock-crm's log. Without them a warm call from voice-context to mock-crm took 7 to 20 ms.
+
+voice-tools, from its runtime log and the actor invocation records.
+
+| Request | Server | Split |
+|---|---|---|
+| First `POST /internal/sessions` (smoke), new container | 1,675 ms | two secret reads 1,278 ms, `Session.create` 382 ms |
+| Second `POST /internal/sessions` (Inspector) | 382 ms | `Session.create` 378 ms, secrets kept |
+| MCP `initialize`, `notifications/initialized`, `tools/list` | 8 to 36 ms | `Session.get` 5 to 8 ms |
+| `tools/call` `verify_account` | 1,581 ms | area status KV read 1,149 ms, actor calls 392 ms, mock-crm 30 ms |
+
+**A new actor instance costs about 0.4 s.** `Session.create` ran in 22 to 24 ms inside the actor, per its invocation records, while the call from voice-tools took 378 to 382 ms. Each session is a new instance, because its name is a new sid. The canary instances already existed, and voice-context's first health call reached them in 49 ms after six hours without a call. So the 431 to 483 ms of the first run were first calls to new instances, not cold containers. Every call setup creates a new `Session` instance, so it should pay this once. `verify_account`'s 392 ms of actor calls include the first call to the instance of DV-100001.
+
+**The checks that failed.** `ok` was false once in eleven calls, on call 9 at 11:53:48.925, when the KV check timed out after 2,501 ms. Across both runs the KV check failed 2 of 22 times. `crm`, `customer_account` and `session` passed every time.
+
+**CRM timeouts.** voice-context's lookup and voice-tools' account fetch stay at 1,500 ms, decided by Thiago on 12 October. The reasoning is in `docs/ARCHITECTURE.md`, Call setup latency budget.
+
+**The actor log line.** T10's last acceptance item looked for the actor's line in `telnyx-edge logs voice-tools`. It is in `telnyx-edge actors logs Session` and `CustomerAccount` instead, and the platform redacts the trace id's hex (issue 16).
 
 ## S2 findings
 
@@ -476,6 +566,15 @@ The answers are at the end of `docs/WORKFLOW.md`, and ADR-010 is accepted.
 - The phone number hung up instantly until it was attached to the assistant's application (`ai-assistant-<id>`), and for a few minutes after that, then worked. Browser test calls worked right away.
 
 **Design impact.** Time-based edges are tested by phone (`docs/WORKFLOW.md`, path G, and T13), and the provisioning script sets every edge's value type explicitly (T11).
+
+**Read back through the API, 12 October.** Thiago saved `GET /v2/ai/assistants/<id>` of `spike-routing` and `GET /v2/ai/tools` in `~/code/scratch/t11/`. They show how the API returns what the portal made, which T11's comparison relies on.
+
+- Prompt nodes come back with `instructions_mode` `append`, `tools_mode` `replace`, `shared_tool_ids` null and `tools` empty. The workflow guide says a new node starts with every tool of the assistant, so that is how a node without tool settings reads.
+- Tool nodes come back with the resolved `tool`, a `position`, and `message` null when they have none. Speak nodes carry a `position` too.
+- Edges come back with `id`, `start_node_id`, `target` and `condition` only, and the Number literal reads `20.0`.
+- The assistant has no `tool_ids` field. Its attached shared tool appears in `tools`, with `shared` true and its `tool_id`. `mcp_servers` is an empty list.
+- A shared tool reads as `id`, `type`, `display_name`, `tool_definition`, `timeout_ms` and `created_at`. Telnyx's SDK creates one with the definition under a field named after its type, such as `webhook` (https://github.com/team-telnyx/telnyx-node/blob/master/api.md). The `spike_log` definition holds `name`, `description`, `url`, `method`, the three parameter schemas, `headers`, `async` and two preset fields. Telnyx's own "Default transfer" holds `targets` with `name` and `to`, and `from` set to `{{telnyx_agent_target}}`. "Default hangup" holds a `description`. Every tool has `timeout_ms` 5,000.
+- The voice is `Telnyx.Ultra.f786b574-daa5-4673-aa0c-cbe3e8534c02` with its settings, and recording is on, dual channel, mp3.
 
 ## S3 findings
 
