@@ -10,6 +10,8 @@
 
 import { z } from "zod";
 
+import { TIMED_OUT } from "@duinvezel/shared";
+
 /** The signature check is CPU-only and carries no timeout. */
 export const SECRET_HANDLES = {
   telnyxPublicKey: "TELNYX_PUBLIC_KEY",
@@ -52,8 +54,13 @@ export const CANARY_SESSION_SID = "00000000000000000000000000000000";
 /** The canary's customer lookup: fixture account DV-100002 (`+3258000001`). */
 export const CANARY_CRM_PHONE_DIGITS = "3258000001";
 
-/** What a `TimeoutRunner` resolves with when its timer wins the race. */
-export const TIMED_OUT: unique symbol = Symbol("timed_out");
+/**
+ * What a `TimeoutRunner` resolves with when its timer wins the race. It is
+ * shared's sentinel (T20), re-exported under the name every route and test
+ * already uses, so this function's runner plugs straight into
+ * `createRefreshingValue`.
+ */
+export { TIMED_OUT };
 
 /**
  * Races `fn()` against `ms` milliseconds of real time. Settlements of `fn`

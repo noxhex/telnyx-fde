@@ -23,6 +23,7 @@ import type { SessionsClient } from "../src/clients/sessions.js";
 import { AREA_CACHE_TTL_MS, TIMED_OUT } from "../src/config.js";
 import type { TimeoutRunner } from "../src/config.js";
 import type { CachesDep, SecretsDep, VoiceToolsDeps } from "../src/deps.js";
+import { createFlagsValue } from "../src/flags.js";
 import { handleMcp } from "../src/routes/mcp.js";
 
 // ---------- shared constants (keys generated per run, never committed) ----------
@@ -245,10 +246,9 @@ function makeHarness(seed: {
   const crm = new CrmStub();
   const sessions = new SessionsStub(seed.session === undefined ? makeSession() : seed.session);
   const lines: string[] = [];
-  // Production lifetimes, as literals: area statuses and flags live 10 s in memory.
+  // Production lifetime, as a literal: area statuses live 10 s in memory.
   const caches: CachesDep = {
     areas: createMemoryCache(10_000, clock.now),
-    flags: createMemoryCache(10_000, clock.now),
   };
   const log = createLogger(
     "voice-tools",
@@ -265,6 +265,7 @@ function makeHarness(seed: {
     accounts: accountsNever,
     areas: areasNever,
     caches,
+    flagsValue: createFlagsValue({ kv: () => kv, now: clock.now, timeout: timers.runner }),
     secrets: new SecretsStub({ MCP_TOKEN_KEY: TOKEN_KEY_RAW }),
     log,
     random: (n) => randomBytes(n),

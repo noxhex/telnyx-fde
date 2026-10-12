@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createLogger,
   createMemoryCache,
+  createRefreshingValue,
   decryptForTests,
   kvKeys,
   parseKey,
@@ -26,7 +27,7 @@ import type { KvFake } from "../../../packages/shared/test/fakes/kv.js";
 import type { AccountsClient, RecordCallOutcome } from "../src/clients/accounts.js";
 import type { CrmCallResult, CrmClient } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
-import { TIMED_OUT } from "../src/config.js";
+import { DEFAULT_FLAGS, parseFlags, TIMED_OUT } from "../src/config.js";
 import type { AreaStatusDoc, CrmAnswer, DvFlags, TimeoutRunner } from "../src/config.js";
 import type { CachesDep, SecretsDep, VoiceContextDeps } from "../src/deps.js";
 import { handleDv } from "../src/routes/dv.js";
@@ -328,10 +329,25 @@ function makeHarness(seed: HarnessSeed = {}): Harness {
     clock.now,
   );
   const caches: CachesDep = {
-    flags: createMemoryCache<DvFlags>(10_000, clock.now),
     areas: createMemoryCache<AreaStatusDoc | null>(10_000, clock.now),
     crm: createMemoryCache<CrmAnswer>(60_000, clock.now),
   };
+  // The container's refreshing flags value, fresh per test, built the way
+  // index.ts builds it for one container. The read and the timeout delegate
+  // to deps, so a test can swap deps.kv or deps.timeout mid-flight.
+  const flagsValue = createRefreshingValue<DvFlags>({
+    read: async () => parseFlags(await deps.kv.get(kvKeys.flags(), { type: "json" })),
+    lifetimeMs: 10_000,
+    fallback: DEFAULT_FLAGS,
+    now: clock.now,
+    timeout: (fn, ms) => deps.timeout(fn, ms),
+    onSettled: (outcome, durationMs) => {
+      log.log("info", "flags_read", {
+        outcome,
+        latency_ms: { total: durationMs, kv: durationMs },
+      });
+    },
+  });
   const deps: VoiceContextDeps = {
     now: clock.now,
     kv,
@@ -339,6 +355,7 @@ function makeHarness(seed: HarnessSeed = {}): Harness {
     accounts,
     sessions,
     caches,
+    flagsValue,
     secrets,
     log,
     random: (n) => randomBytes(n),
@@ -390,6 +407,35 @@ function makeHarness(seed: HarnessSeed = {}): Harness {
       return JSON.parse(lines[lines.length - 1] as string) as Record<string, unknown>;
     },
   };
+}
+
+// ---------- flags-read helpers (T20) ----------
+
+/** Wraps deps.kv so every `flags/global` get is held by the test (and recorded); other keys go to the fake. */
+function wrapFlagsKv(h: Harness, held: Promise<unknown>): void {
+  const inner = h.deps.kv;
+  h.deps.kv = {
+    get: ((key: unknown, options: unknown) => {
+      if (key === kvKeys.flags()) {
+        h.kv.calls.push({ method: "get", key: kvKeys.flags(), options: { type: "json" } });
+        return held;
+      }
+      return (inner.get as (k: never, o: never) => Promise<unknown>)(key as never, options as never);
+    }),
+    put: inner.put.bind(inner),
+    delete: inner.delete.bind(inner),
+    list: inner.list.bind(inner),
+  } as unknown as KvFake;
+}
+
+function flagsGets(h: Harness): number {
+  return h.kv.calls.filter((c) => c.method === "get" && c.key === kvKeys.flags()).length;
+}
+
+function flagsReadLines(h: Harness): Record<string, unknown>[] {
+  return h.lines
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+    .filter((l) => l.event === "flags_read");
 }
 
 // ---------- auth ----------
@@ -1112,21 +1158,13 @@ describe("handleDv memory caches", () => {
     expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
   });
 
-  it("a failed flags read is never cached: the next request reads KV again", async () => {
+  it("a flags read the wait gave up on stays shared, and dv_force_error from its late success applies to the next call (T20)", async () => {
     const h = makeHarness();
     seededCustomer(h);
     const heldFlags = hold<unknown>();
-    const inner = h.deps.kv;
-    h.deps.kv = {
-      get: ((key: unknown, options: unknown) =>
-        key === kvKeys.flags()
-          ? heldFlags.promise
-          : (inner.get as (k: never, o: never) => Promise<unknown>)(key as never, options as never)),
-      put: inner.put.bind(inner),
-      delete: inner.delete.bind(inner),
-      list: inner.list.bind(inner),
-    } as unknown as KvFake;
+    wrapFlagsKv(h, heldFlags.promise);
 
+    // First /dv: the flags wait gives up; the defaults answer the call.
     const pending = h.call(makeDvBody());
     await tick();
     expect(h.timers.entries[1]?.ms).toBe(1_000);
@@ -1135,16 +1173,83 @@ describe("handleDv memory caches", () => {
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).diagnostics_enabled).toBe("true");
 
-    // Next request on a restored KV reads the flags document again.
-    h.deps.kv = h.kv;
-    await h.kv.put(kvKeys.flags(), JSON.stringify({ diagnostics_enabled: false }));
-    h.kv.reset();
-    const next = await h.call();
-    expect(h.kv.calls.filter((c) => c.method === "get").map((c) => c.key)).toContain(
-      kvKeys.flags(),
-    );
-    expect((next.body.dynamic_variables as Record<string, string>).diagnostics_enabled).toBe("false");
+    // The read is still in flight: the next /dv joins it instead of
+    // reading KV again, and its late answer applies at once.
+    const second = h.call();
+    await tick();
+    heldFlags.resolve({ dv_force_error: true });
+    const secondRes = await second;
+    expect(secondRes.status).toBe(500);
+    expect(secondRes.body).toEqual({ error: "dv_force_error" });
+    expect(flagsGets(h)).toBe(1);
+  });
+
+  it("a /dv with a last good flags value does not wait for KV, also while the refresh it started never settles (T20)", async () => {
+    const h = makeHarness({ flagsDoc: { diagnostics_enabled: false } });
+    seededCustomer(h);
+    const first = await h.call(makeDvBody());
+    expect((first.body.dynamic_variables as Record<string, string>).diagnostics_enabled).toBe("false");
+    expect(flagsGets(h)).toBe(1);
+
+    // Exactly one lifetime later the value is stale: the next /dv starts a
+    // background refresh (held forever here) but answers at once from the
+    // last good value, without any wait.
+    const heldRefresh = hold<unknown>();
+    wrapFlagsKv(h, heldRefresh.promise);
+    h.clock.advance(10_000);
+    const { status, body } = await h.call();
+    expect(status).toBe(200);
+    expect((body.dynamic_variables as Record<string, string>).diagnostics_enabled).toBe("false");
+    expect(flagsGets(h)).toBe(2);
+
+    // The never-settling refresh keeps costing nothing: another /dv behind
+    // it answers at once too, and starts no further read.
+    h.clock.advance(5_000);
+    const again = await h.call();
+    expect(again.status).toBe(200);
+    expect(flagsGets(h)).toBe(2);
+  });
+
+  it("the first /dv still gives its flags wait the card's 1,000 ms bound, cut against the soft budget (T20)", async () => {
+    // The flags wait opens as the first step inside the 3,000 ms soft
+    // budget, so its cut to what remains is the card's own 1,000 ms — as
+    // before. (The cut mechanism itself is pinned by the soft-budget
+    // describe below, where later calls get only what remains.)
+    const h = makeHarness();
+    const heldFlags = hold<unknown>();
+    wrapFlagsKv(h, heldFlags.promise);
+
+    const pending = h.call(makeDvBody());
+    await tick();
+    const flagsEntry = h.timers.entries[1];
+    expect(flagsEntry?.ms).toBe(1_000);
+    flagsEntry?.fire();
+    const { status } = await pending;
+    expect(status).toBe(200);
     heldFlags.resolve(null);
+    await tick();
+  });
+
+  it("writes one flags_read line per settled flags read, and none while no read has run (T20)", async () => {
+    const h = makeHarness({ flagsDoc: { diagnostics_enabled: false } });
+    // No call yet: no read ever ran.
+    expect(flagsReadLines(h)).toEqual([]);
+
+    seededCustomer(h);
+    await h.call(makeDvBody());
+    expect(flagsReadLines(h)).toHaveLength(1);
+    expect(flagsReadLines(h)[0]).toMatchObject({
+      svc: "voice-context",
+      event: "flags_read",
+      outcome: "ok",
+    });
+    const latency = flagsReadLines(h)[0]?.latency_ms as Record<string, unknown>;
+    expect(typeof latency.total).toBe("number");
+    expect(latency.kv).toBe(latency.total);
+
+    // Within the lifetime there is no new read, so no new line.
+    await h.call();
+    expect(flagsReadLines(h)).toHaveLength(1);
   });
 });
 

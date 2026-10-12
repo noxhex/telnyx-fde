@@ -13,7 +13,7 @@
 
 import type { KvNamespace } from "@telnyx/edge-runtime";
 
-import type { Logger, MemoryCache } from "@duinvezel/shared";
+import type { Logger, MemoryCache, RefreshingValue } from "@duinvezel/shared";
 
 import type { AccountsClient } from "./clients/accounts.js";
 import type { CrmClient } from "./clients/crm.js";
@@ -21,8 +21,6 @@ import type { SessionsClient } from "./clients/sessions.js";
 import type { AreaStatusDoc, CrmAnswer, DvFlags, TimeoutRunner } from "./config.js";
 
 export interface CachesDep {
-  /** Whole flag document answers, 10 s. */
-  flags: MemoryCache<DvFlags>;
   /** Per-postcode status answers, 10 s; null is the "never published, so ok" answer. */
   areas: MemoryCache<AreaStatusDoc | null>;
   /** CRM lookup answers keyed by caller digits, 60 s (negative answers included). */
@@ -43,6 +41,12 @@ export interface VoiceContextDeps {
   accounts: AccountsClient;
   sessions: SessionsClient;
   caches: CachesDep;
+  /**
+   * The container's refreshing `flags/global` value (T20): one per
+   * container, the last good parse served with no wait and refreshed in the
+   * background once its 10 s lifetime has passed.
+   */
+  flagsValue: RefreshingValue<DvFlags>;
   secrets: SecretsDep;
   log: Logger;
   /** Nonce source for encryptForTelnyx (crypto randomBytes in production, pinned in tests). */

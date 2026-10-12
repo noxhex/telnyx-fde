@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { kvKeys } from "@duinvezel/shared";
+
 import { hasValidInternalKey } from "../src/auth.js";
 import { SECRET_READ_TIMEOUT_MS } from "../src/index.js";
 import { TIMED_OUT } from "../src/flags.js";
 import {
+  DEMO_PHONE_HANDLE,
   hold,
   INTERNAL_KEY_HANDLE,
   makeHarness,
@@ -34,23 +37,28 @@ describe("hasValidInternalKey", () => {
 });
 
 describe("internal key on the routes", () => {
-  it("answers 401 when the header is missing, before touching KV", async () => {
+  it("answers 401 when the header is missing, before any state access of its own", async () => {
     const h = makeHarness();
     const res = await h.call("/customers?phone=3258000001", { key: null });
 
     expect(res.status).toBe(401);
     expect(res.body).toEqual({ error: "unauthorized" });
-    expect(h.kv.calls).toHaveLength(0);
+    // The only KV touch is the warm-up's flags read (the T20 exception);
+    // the 401 itself waits for nothing and reads no document.
+    expect(h.kv.calls.filter((c) => c.method === "put")).toHaveLength(0);
+    expect(h.kv.calls.map((c) => c.key)).toEqual([kvKeys.flags()]);
   });
 
-  it("answers 401 for a wrong key, before touching KV", async () => {
+  it("answers 401 for a wrong key, using no flags of its own", async () => {
     const h = makeHarness();
     await h.setFlags({ crm_delay_ms: 0, crm_fail: false });
+    h.kv.reset(); // forget the seeding write; only the request counts
     const res = await h.call("/customers?phone=3258000001", { key: "not-the-key" });
 
     expect(res.status).toBe(401);
-    // Flags were seeded but must never be read: auth comes first.
-    expect(h.kv.calls.filter((c) => c.method === "get")).toHaveLength(0);
+    // Auth comes first: beyond the one warm-up flags read (T20), the
+    // request reads no document before rejecting.
+    expect(h.kv.calls.map((c) => c.key)).toEqual([kvKeys.flags()]);
   });
 
   it("serves the request with the right key", async () => {
@@ -68,12 +76,12 @@ describe("internal key on the routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("counts a secret read that cannot answer in time as missing (401, no KV)", async () => {
+  it("counts a secret read that cannot answer in time as missing (401)", async () => {
     const h = makeHarness();
     let timerMs = -1;
     let fireTimer!: () => void;
-    // The secret read never settles; only the injected timer can end it.
-    h.deps.readSecret = () => new Promise<string | null>(() => {});
+    // The secret read never settles; only the injected timer can end the wait.
+    h.setReadSecret(() => new Promise<string | null>(() => {}));
     h.deps.timeout = <T>(fn: () => Promise<T>, ms: number) =>
       new Promise<T | typeof TIMED_OUT>((resolve) => {
         timerMs = ms;
@@ -89,22 +97,24 @@ describe("internal key on the routes", () => {
 
     expect(res.status).toBe(401);
     expect(timerMs).toBe(SECRET_READ_TIMEOUT_MS);
-    // Auth failed before flags or anything else touched KV.
-    expect(h.kv.calls).toHaveLength(0);
   });
 
-  it("reads INTERNAL_KEY after routing and before the auth check", async () => {
+  it("reads INTERNAL_KEY after routing and before the auth check, once per container", async () => {
     const h = makeHarness();
     await h.call("/customers?phone=3258000001", { key: "nope" });
 
-    expect(h.secretReads).toEqual([INTERNAL_KEY_HANDLE]);
+    // The warm-up read, shared by this request: exactly one read of each
+    // handle, and the key check happens before any flags wait.
+    expect(h.secretReads).toEqual([INTERNAL_KEY_HANDLE, DEMO_PHONE_HANDLE]);
   });
 
   it("logs the 401 without a caller or account", async () => {
     const h = makeHarness();
     await h.call("/accounts/DV-100002", { key: "nope" });
 
-    const log = h.lastLog();
+    const log = h.lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l.event === "crm_request");
     expect(log).toMatchObject({ event: "crm_request", route: "accounts", status: 401 });
     expect(log).not.toHaveProperty("caller");
     expect(log).not.toHaveProperty("account");
@@ -117,7 +127,7 @@ describe("the bounded INTERNAL_KEY read, kept per container (T10 follow-up)", ()
     const manual = manualTimeout();
     h.deps.timeout = manual.runner;
     const held = hold<string | null>();
-    h.deps.readSecret = () => held.promise;
+    h.setReadSecret(() => held.promise);
 
     const pending = h.call("/accounts/DV-100002");
     await tick();
@@ -138,14 +148,16 @@ describe("the bounded INTERNAL_KEY read, kept per container (T10 follow-up)", ()
     const h = makeHarness();
     const manual = manualTimeout();
     h.deps.timeout = manual.runner;
-    let reads = 0;
-    const heldReads: HeldPromise<string | null>[] = [];
-    h.deps.readSecret = () => {
-      reads += 1;
+    const reads: string[] = [];
+    const heldByHandle = new Map<string, HeldPromise<string | null>[]>();
+    h.setReadSecret((handle) => {
+      reads.push(handle);
       const held = hold<string | null>();
-      heldReads.push(held);
+      const list = heldByHandle.get(handle) ?? [];
+      list.push(held);
+      heldByHandle.set(handle, list);
       return held.promise;
-    };
+    });
 
     const pending = h.call("/accounts/DV-100002");
     await tick();
@@ -155,11 +167,11 @@ describe("the bounded INTERNAL_KEY read, kept per container (T10 follow-up)", ()
 
     // Settling that read afterwards changes nothing for the answered request
     // — but the late success is kept, so the next request needs no new read.
-    heldReads[0]?.resolve(TEST_INTERNAL_KEY);
+    heldByHandle.get(INTERNAL_KEY_HANDLE)?.[0]?.resolve(TEST_INTERNAL_KEY);
     await tick();
     const second = await h.call("/accounts/DV-100002");
 
     expect(second.status).toBe(200);
-    expect(reads).toBe(1);
+    expect(reads.filter((r) => r === INTERNAL_KEY_HANDLE)).toHaveLength(1);
   });
 });

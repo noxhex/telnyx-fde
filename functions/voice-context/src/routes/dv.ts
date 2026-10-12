@@ -7,8 +7,10 @@
  *      fails closed, before any KV or actor access);
  *   2. zod parse, `assistant.initialization` only (400 otherwise);
  *   3. sid = sessionIdFromCallControlId(call_control_id);
- *   4. flags, CRM lookup and the five area statuses start together, each
- *      inside its own timeout, through the per-container memory caches;
+ *   4. both token keys, the flags, the CRM lookup and the five area
+ *      statuses start together — the flags from the container's refreshing
+ *      value (T20), so only a container's first requests can wait for KV,
+ *      the rest each inside its own timeout behind the memory caches;
  *   5. flags first — `dv_force_error` answers 500 before any state change;
  *   6/7. once the CRM lookup has answered: recordCall, SESSION.create and
  *      the KV cache write (mock-crm answers only) run in parallel;
@@ -37,11 +39,9 @@ import {
 
 import {
   CRM_KV_TTL_SEC,
-  DEFAULT_FLAGS,
   encodeCrmCacheValue,
   parseAreaStatus,
   parseCrmCacheValue,
-  parseFlags,
   SECRET_HANDLES,
   SESSION_TTL_MS,
   SOFT_BUDGET_MS,
@@ -85,29 +85,20 @@ function cut(ownMs: number, budget: { startMs: number; deps: VoiceContextDeps })
   return Math.max(0, Math.min(ownMs, remaining));
 }
 
-/** Flags from memory, else `flags/global` from KV; a timeout, an error or a missing document gives the defaults and is never cached. */
+/**
+ * The flags from the container's refreshing value (T20): a last good parse
+ * answers at once and the request waits for nothing; while no read has ever
+ * succeeded, the request waits for the read in flight, cut to what remains
+ * of the soft budget (and never more than `TIMEOUTS.flagsMs`). The `kv` hop
+ * here times only what the request itself waited — a late success still
+ * becomes the last good value and applies to the next call.
+ */
 async function readFlags(
   deps: VoiceContextDeps,
   timings: Timings,
   budget: { startMs: number; deps: VoiceContextDeps },
 ): Promise<DvFlags> {
-  const cached = deps.caches.flags.get("global");
-  if (cached !== undefined) {
-    return cached;
-  }
-  try {
-    const raw = await timings.time("kv", () =>
-      deps.timeout(() => deps.kv.get(kvKeys.flags(), { type: "json" }), cut(TIMEOUTS.flagsMs, budget)),
-    );
-    if (raw === TIMED_OUT || raw === null) {
-      return DEFAULT_FLAGS;
-    }
-    const flags = parseFlags(raw);
-    deps.caches.flags.set("global", flags);
-    return flags;
-  } catch {
-    return DEFAULT_FLAGS;
-  }
+  return timings.time("kv", () => deps.flagsValue.get(cut(TIMEOUTS.flagsMs, budget)));
 }
 
 /** All five area statuses in parallel, each memory-cached; failed reads leave that area unknown and are never cached. */

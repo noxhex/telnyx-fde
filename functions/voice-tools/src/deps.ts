@@ -16,7 +16,7 @@
 
 import type { KvNamespace } from "@telnyx/edge-runtime";
 
-import type { Logger, MemoryCache } from "@duinvezel/shared";
+import type { Logger, MemoryCache, RefreshingValue } from "@duinvezel/shared";
 
 import type { AreaStatusDoc } from "./area-status.js";
 import type { AccountsClient } from "./clients/accounts.js";
@@ -29,8 +29,6 @@ import type { ToolsFlags } from "./flags.js";
 export interface CachesDep {
   /** Per-postcode status answers, 10 s; null is the "never published, so ok" answer. */
   areas: MemoryCache<AreaStatusDoc | null>;
-  /** The `flags/global` document, 10 s; only parsed answers, never a timeout or the defaults (T19). */
-  flags: MemoryCache<ToolsFlags>;
 }
 
 export interface SecretsDep {
@@ -50,6 +48,13 @@ export interface VoiceToolsDeps {
   /** `AREA_INCIDENT` typed with the class's own method shapes (T19). */
   areas: AreasClient;
   caches: CachesDep;
+  /**
+   * The container's refreshing `flags/global` value (T20): one per
+   * container, the last good parse served with no wait and refreshed in the
+   * background once its 10 s lifetime has passed. Undefined when there is
+   * no KV binding (`telnyx-edge dev`), where the defaults apply.
+   */
+  flagsValue: RefreshingValue<ToolsFlags> | undefined;
   secrets: SecretsDep;
   log: Logger;
   /** Randomness for the internal-session sid (crypto randomBytes in production, pinned in tests). */

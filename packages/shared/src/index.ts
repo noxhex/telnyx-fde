@@ -3,6 +3,14 @@ export type { Area } from "./areas.js";
 export { assertValidKey, kvKeys, sessionIdFromCallControlId } from "./kv-keys.js";
 export { createMemoryCache } from "./memory-cache.js";
 export type { MemoryCache } from "./memory-cache.js";
+export { createRefreshingValue, TIMED_OUT } from "./refreshing-value.js";
+export type {
+  RefreshingValue,
+  RefreshingValueOptions,
+  RefreshOutcome,
+  RefreshSettledListener,
+  TimeoutRunner as RefreshTimeoutRunner,
+} from "./refreshing-value.js";
 export { createLogger } from "./log.js";
 export type { Fields, Level, Logger } from "./log.js";
 export { maskAccount, maskPhone } from "./mask.js";

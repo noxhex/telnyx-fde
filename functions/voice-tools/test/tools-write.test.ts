@@ -29,6 +29,7 @@ import type { ReportResult } from "../src/domain/area-incident.js";
 import { FLAG_CACHE_TTL_MS, TIMED_OUT } from "../src/config.js";
 import type { TimeoutRunner } from "../src/config.js";
 import type { CachesDep, SecretsDep, VoiceToolsDeps } from "../src/deps.js";
+import { createFlagsValue } from "../src/flags.js";
 import { callbackTicketId, handleCreateTicket } from "../src/mcp/tools/create-ticket.js";
 import { handleMcp } from "../src/routes/mcp.js";
 
@@ -318,6 +319,8 @@ interface Harness {
   timers: ManualTimers;
   clock: ClockFake;
   deps: VoiceToolsDeps;
+  /** Raw JSON log lines, one per tool call plus one `flags_read` per settled flags read. */
+  lines: string[];
   callTool(name: string, args: Record<string, unknown>): Promise<ToolAnswer>;
 }
 
@@ -337,10 +340,9 @@ function makeHarness(seed: {
   const areas = new AreasStub();
   const sessions = new SessionsStub(seed.session === undefined ? makeSession() : seed.session);
   const lines: string[] = [];
-  // Production lifetimes, as literals: area statuses and flags live 10 s in memory.
+  // Production lifetime, as a literal: area statuses live 10 s in memory.
   const caches: CachesDep = {
     areas: createMemoryCache(10_000, clock.now),
-    flags: createMemoryCache(10_000, clock.now),
   };
   const log = createLogger(
     "voice-tools",
@@ -349,6 +351,22 @@ function makeHarness(seed: {
     },
     clock.now,
   );
+  // The container's refreshing flags value, fresh per test, built the way
+  // index.ts builds it for one container (undefined when there is no KV).
+  const flagsValue =
+    kv === undefined
+      ? undefined
+      : createFlagsValue({
+          kv: () => kv,
+          now: clock.now,
+          timeout: timers.runner,
+          onSettled: (outcome, durationMs) => {
+            log.log("info", "flags_read", {
+              outcome,
+              latency_ms: { total: durationMs, kv: durationMs },
+            });
+          },
+        });
   const deps: VoiceToolsDeps = {
     now: seed.now ?? clock.now,
     kv,
@@ -357,6 +375,7 @@ function makeHarness(seed: {
     accounts,
     areas,
     caches,
+    flagsValue,
     secrets: new SecretsStub({ MCP_TOKEN_KEY: TOKEN_KEY_RAW }),
     log,
     random: (n) => randomBytes(n),
@@ -381,6 +400,7 @@ function makeHarness(seed: {
     timers,
     clock,
     deps,
+    lines,
     async callTool(name, args) {
       const res = await handleMcp(
         new Request("http://x.test/mcp", {
@@ -1122,7 +1142,7 @@ describe("report_outage", () => {
     const h = makeHarness({});
     h.areas.heldReport = hold<ReportResult>();
     const pending = h.callTool("report_outage", { symptom: "no_connection" });
-    await tick();
+    await tick(60); // the refreshing flags value adds a few hops before the report starts
     // The flags read settled; the pending timer is the 3,000 ms report.
     const timer = h.timers.pending().find((e) => e.ms === 3_000);
     expect(timer).toBeDefined();
@@ -1140,7 +1160,7 @@ describe("report_outage", () => {
     await tick();
   });
 
-  it("a held flags read times out at exactly 1,000 ms: the defaults apply, the late answer is absorbed, and nothing is cached", async () => {
+  it("a held flags read times out at exactly 1,000 ms: the defaults apply, and the late success applies to the next call (T20)", async () => {
     const h = makeHarness({});
     const held = hold<unknown>();
     const realGet = (h.kv as KvFake).get.bind(h.kv);
@@ -1160,23 +1180,58 @@ describe("report_outage", () => {
     const answer = await pending;
     expect(answer.result).toMatchObject({ reports_in_window: 2 });
     expect(h.areas.reports[0]?.input).toMatchObject({ threshold: 3, windowMs: 1_800_000 });
-    // The flags document arrives after the timeout fired: absorbed quietly,
-    // and a timeout is not an answer, so the next call reads KV again.
+    // The flags document arrives after the wait gave up: its success
+    // becomes the last good value, and the next call uses it without
+    // reading KV again.
     held.resolve({ incident_threshold: 5 });
     await tick();
     expect(flagsGets(h)).toBe(1);
     (h.kv as KvFake).get = realGet;
     await h.callTool("report_outage", { symptom: "no_connection" });
+    expect(h.areas.reports[1]?.input).toMatchObject({ threshold: 5 });
+    expect(flagsGets(h)).toBe(1);
+  });
+
+  it("with a last good value a call never waits for KV, also while the refresh it started never settles (T20)", async () => {
+    const h = makeHarness({
+      flagsDoc: { incident_threshold: 5, report_window_secs: 900, incident_eta_minutes: 60 },
+    });
+    await h.callTool("report_outage", { symptom: "slow" });
+    expect(flagsGets(h)).toBe(1);
+
+    // Exactly one lifetime later the flags read is held: the next call
+    // starts a background refresh but answers at once from the last good
+    // value — the answer comes back while the read is still pending.
+    const held = hold<unknown>();
+    const realGet = (h.kv as KvFake).get.bind(h.kv);
+    (h.kv as KvFake).get = ((key: string, options: unknown) => {
+      if (key === kvKeys.flags()) {
+        (h.kv as KvFake).calls.push({ method: "get", key });
+        return held.promise;
+      }
+      return (realGet as (k: string, o: unknown) => Promise<unknown>)(key, options);
+    }) as KvFake["get"];
+    h.clock.advance(10_000);
+    const answer = await h.callTool("report_outage", { symptom: "slow" });
+    expect(answer.result).toMatchObject({ reports_in_window: 2 });
+    expect(h.areas.reports[1]?.input.threshold).toBe(5);
+    expect(flagsGets(h)).toBe(2);
+    // The refresh has not settled and the call never timed out.
+    expect(h.timers.pending().filter((e) => e.ms === 1_000)).toEqual([]);
+
+    // With the refresh still in flight, another call starts no new read.
+    h.clock.advance(5_000);
+    await h.callTool("report_outage", { symptom: "slow" });
     expect(flagsGets(h)).toBe(2);
   });
 });
 
-// ---------- the flags 10-second memory cache ----------
+// ---------- the flags 10-second lifetime (T20) ----------
 
-describe("report_outage flags cache", () => {
-  it("the production cache lifetime is exactly 10 seconds", () => {
-    // The caches above are built with the literal 10_000; this pins the
-    // production constant to that same literal, so a changed production
+describe("report_outage flags lifetime", () => {
+  it("the production flags lifetime is exactly 10 seconds", () => {
+    // The harness's area cache is built with the literal 10_000; this pins
+    // the production constant to that same literal, so a changed production
     // lifetime fails here instead of passing silently.
     expect(FLAG_CACHE_TTL_MS).toBe(10_000);
   });
@@ -1195,40 +1250,47 @@ describe("report_outage flags cache", () => {
     expect(flagsGets(h)).toBe(1);
     expect(h.areas.reports[1]?.input.threshold).toBe(5);
 
-    // Exactly 10,000 ms after the write: expired — one more KV read.
+    // Exactly 10,000 ms after the write: the value is stale — the call
+    // answers from it at once and starts one background read.
     h.clock.advance(1);
     await h.callTool("report_outage", { symptom: "slow" });
     expect(flagsGets(h)).toBe(2);
     expect(h.areas.reports[2]?.input.threshold).toBe(5);
   });
 
-  it("the defaults are never cached: a missing flags key is read again on the next call", async () => {
+  it("a missing key is an answer: the defaults become the last good value, read again only after the lifetime (T20)", async () => {
     const h = makeHarness({});
     await h.callTool("report_outage", { symptom: "slow" });
     expect(flagsGets(h)).toBe(1);
     expect(h.areas.reports[0]?.input.threshold).toBe(3);
     h.clock.advance(5);
     await h.callTool("report_outage", { symptom: "slow" });
+    // The parsed defaults are the last good value now: no second read.
+    expect(flagsGets(h)).toBe(1);
+
+    // Once the lifetime passes, one background read runs.
+    h.clock.advance(10_000);
+    await h.callTool("report_outage", { symptom: "slow" });
     expect(flagsGets(h)).toBe(2);
   });
 
-  it("a stored non-document answers with the defaults and is not cached", async () => {
+  it("a stored non-document parses to the defaults and becomes the last good value (T20)", async () => {
     const h = makeHarness({ flagsDoc: 42 });
     await h.callTool("report_outage", { symptom: "slow" });
     expect(h.areas.reports[0]?.input.threshold).toBe(3);
     await h.callTool("report_outage", { symptom: "slow" });
-    expect(flagsGets(h)).toBe(2);
+    expect(flagsGets(h)).toBe(1);
   });
 
-  it("a stored flags array is no document either: defaults, and nothing cached", async () => {
+  it("a stored flags array parses to the defaults and becomes the last good value too (T20)", async () => {
     const h = makeHarness({ flagsDoc: [3, 1800, 240] });
     await h.callTool("report_outage", { symptom: "slow" });
     expect(h.areas.reports[0]?.input).toMatchObject({ threshold: 3, windowMs: 1_800_000 });
     await h.callTool("report_outage", { symptom: "slow" });
-    expect(flagsGets(h)).toBe(2);
+    expect(flagsGets(h)).toBe(1);
   });
 
-  it("a single bad flag falls back on its own; the document is still an answer worth caching", async () => {
+  it("a single bad flag falls back on its own; the document is still an answer worth keeping", async () => {
     const h = makeHarness({
       flagsDoc: { incident_threshold: "many", report_window_secs: 600, incident_eta_minutes: 120 },
     });
@@ -1240,6 +1302,33 @@ describe("report_outage flags cache", () => {
     });
     await h.callTool("report_outage", { symptom: "slow" });
     expect(flagsGets(h)).toBe(1);
+  });
+
+  it("writes one flags_read line per settled flags read, and none while no read has run (T20)", async () => {
+    const h = makeHarness({
+      flagsDoc: { incident_threshold: 5, report_window_secs: 900, incident_eta_minutes: 60 },
+    });
+    const flagsReadLines = (): Record<string, unknown>[] =>
+      h.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.event === "flags_read");
+
+    // No call yet: no read ever ran.
+    expect(flagsReadLines()).toEqual([]);
+    await h.callTool("report_outage", { symptom: "slow" });
+    expect(flagsReadLines()).toHaveLength(1);
+    expect(flagsReadLines()[0]).toMatchObject({
+      svc: "voice-tools",
+      event: "flags_read",
+      outcome: "ok",
+    });
+    const latency = flagsReadLines()[0]?.latency_ms as Record<string, unknown>;
+    expect(typeof latency.total).toBe("number");
+    expect(latency.kv).toBe(latency.total);
+
+    // Within the lifetime there is no new read, so no new line.
+    await h.callTool("report_outage", { symptom: "slow" });
+    expect(flagsReadLines()).toHaveLength(1);
   });
 });
 

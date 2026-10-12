@@ -158,9 +158,15 @@ function makeHarness(options: { publicKey?: string | null } = {}): Harness {
     },
     sessions,
     caches: {
-      flags: { get: () => undefined, peekAt: () => undefined, has: () => false, set: () => {} },
       areas: { get: () => undefined, peekAt: () => undefined, has: () => false, set: () => {} },
       crm: { get: () => undefined, peekAt: () => undefined, has: () => false, set: () => {} },
+    },
+    // The route never reads the flags: any use fails the test.
+    flagsValue: {
+      get: () => Promise.reject(new Error("flagsValue must not be read by disclosure")),
+      start: () => {
+        throw new Error("flagsValue must not be started by disclosure");
+      },
     },
     secrets,
     log,

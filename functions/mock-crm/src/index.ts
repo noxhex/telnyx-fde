@@ -5,37 +5,51 @@
  * line per request, written however the request ends.
  *
  * Order of decisions for a request:
- *   1. routing — unknown paths get a 404 immediately: no KV, no secrets
- *      (`env.SECRETS.get` is an HTTP call to the sidecar, so reading a
- *      secret costs a network hop only matched routes should pay for);
- *   2. the secret read — a matched route reads `INTERNAL_KEY` after routing
- *      and before auth, bounded by `SECRET_READ_TIMEOUT_MS`; a secret that
- *      cannot be read in time counts as missing, so auth fails closed 401.
- *      Successful reads are kept per container (issue 14: a deployed read
- *      costs 0.55 to 0.75 s), so only the first keyed request pays for them;
- *   3. auth — a missing or wrong `x-internal-key` is a 401 before anything
- *      else happens (no KV, no flags, no handler);
- *   4. flags — `crm_fail` answers 503 `{ "error": "unavailable" }`, then
- *      `crm_delay_ms` stalls every route except `/healthz`;
- *   5. the route handler — only `/customers` additionally reads
- *      `DEMO_CALLER_PHONE` (timed, and only here).
- * `/healthz` skips all of it: no secret, no flags, no KV, so the health
- * check works while the CRM is made slow or broken on purpose.
+ *   0. warm-up — the container's first request of any kind, unknown paths
+ *      and `/healthz` included, starts the `INTERNAL_KEY` read, the
+ *      `DEMO_CALLER_PHONE` read and the flags read together, once per
+ *      container, and never waits for them (T20; the one exception to
+ *      ADR-014 that Thiago allowed on 12 October — the reads change no
+ *      state). So a later keyed request joins reads already running;
+ *   1. routing — unknown paths get a 404 immediately and `/healthz` a 200,
+ *      without waiting for anything;
+ *   2. auth — a keyed route waits for the shared `INTERNAL_KEY` read; a
+ *      missing or wrong `x-internal-key` is a 401 without waiting for
+ *      anything else (no flags, no handler);
+ *   3. flags — from the container's refreshing flags value: a last good
+ *      parse answers at once, otherwise the request waits within what
+ *      remains of its window. `crm_fail` answers 503
+ *      `{ "error": "unavailable" }`, then `crm_delay_ms` stalls every route
+ *      except `/healthz`;
+ *   4. the route handler — only `/customers` additionally waits for the
+ *      shared `DEMO_CALLER_PHONE` read.
+ *
+ * A keyed request's waits share one window of `READ_WINDOW_MS`, which opens
+ * when the request first waits for a read: the first keyed lookup on a new
+ * container waits for the slowest of the warm-up reads, not their sum, and
+ * never more than 1,000 ms in all (DEBUGLOG issue 15).
  */
 
 import type { Env, KvNamespace, Secrets } from "@telnyx/edge-runtime";
 
 import {
   createLogger,
+  createRefreshingValue,
   maskAccount,
   maskPhone,
   startTimings,
 } from "@duinvezel/shared";
-import type { Fields, Timings } from "@duinvezel/shared";
+import type { Fields, RefreshingValue, Timings } from "@duinvezel/shared";
 
 import { hasValidInternalKey, INTERNAL_KEY_HEADER } from "./auth.js";
-import { getFlags, realTimeoutRunner, TIMED_OUT } from "./flags.js";
-import type { CrmFlags, FlagsCacheBox, TimeoutRunner } from "./flags.js";
+import {
+  DEFAULT_FLAGS,
+  FLAGS_CACHE_TTL_MS,
+  realTimeoutRunner,
+  readFlagsDocument,
+  TIMED_OUT,
+} from "./flags.js";
+import type { CrmFlags, TimeoutRunner } from "./flags.js";
 import { getAccount } from "./routes/accounts.js";
 import { getCustomer } from "./routes/customers.js";
 import { runLineTestRoute } from "./routes/lines.js";
@@ -43,12 +57,18 @@ import { runLineTestRoute } from "./routes/lines.js";
 const SERVICE_NAME = "mock-crm";
 
 /**
- * A secret read is one HTTP hop to the sidecar; deployed, the first read in
- * a container takes 0.55 to 0.75 s (DEBUGLOG issue 14), so the old 300 ms
- * bound timed every read out. 1,000 ms is what voice-tools and voice-context
- * give the same call.
+ * One keyed request waits at most this long for everything it reads: the
+ * window opens at the request's first wait and covers the `INTERNAL_KEY`
+ * check, the flags and `DEMO_CALLER_PHONE` (T20).
  */
-export const SECRET_READ_TIMEOUT_MS = 1_000;
+export const READ_WINDOW_MS = 1_000;
+
+/** Kept under the old name: a single secret wait is bounded by the shared window. */
+export const SECRET_READ_TIMEOUT_MS = READ_WINDOW_MS;
+
+/** The two secrets keyed routes may need; both are warmed on a container's first request. */
+const INTERNAL_KEY_HANDLE = "INTERNAL_KEY";
+const DEMO_PHONE_HANDLE = "DEMO_CALLER_PHONE";
 
 /** The bindings this function declares in telnyx.toml. */
 export interface CrmEnv extends Env {
@@ -86,35 +106,84 @@ export function matchRoute(method: string, pathname: string): RouteMatch {
 }
 
 /**
- * Successful secret reads, kept for the life of a container (issue 14). The
- * caller owns the box the way it owns the flags cache: production creates it
- * once at module scope, each test harness creates a fresh one.
+ * The per-container secret reads (T20). A successful read is kept for the
+ * container's life; a timeout, a thrown read or an empty value keeps
+ * nothing, so a later request reads again. While a read is in flight every
+ * waiter shares it — nobody starts a second one. The promise never rejects:
+ * failures resolve null, so fire-and-forget warm-up reads are safe.
  */
-export interface SecretCacheBox {
-  values: Map<string, string>;
+export interface SecretStore {
+  read(handle: string): Promise<string | null>;
+}
+
+export function createSecretStore(
+  readSecret: (handle: string) => Promise<string | null>,
+): SecretStore {
+  const kept = new Map<string, string>();
+  const inFlight = new Map<string, Promise<string | null>>();
+  return {
+    read(handle: string): Promise<string | null> {
+      const hit = kept.get(handle);
+      if (hit !== undefined) {
+        return Promise.resolve(hit);
+      }
+      const current = inFlight.get(handle);
+      if (current !== undefined) {
+        return current;
+      }
+      const promise = (async (): Promise<string | null> => {
+        try {
+          const value = await readSecret(handle);
+          if (value !== null && value.length > 0) {
+            kept.set(handle, value);
+          }
+          return value;
+        } catch {
+          return null;
+        } finally {
+          inFlight.delete(handle);
+        }
+      })();
+      inFlight.set(handle, promise);
+      return promise;
+    },
+  };
+}
+
+/** Once-per-container warm-up state (T20): the three reads start on the first request of any kind. */
+export interface WarmBox {
+  warmed: boolean;
 }
 
 /** Everything `handleRequest` needs; tests inject fakes and stubs. */
 export interface CrmDeps {
-  kv: KvNamespace;
-  /**
-   * Reads one secret by handle (raw: no timeout and no memo in here —
-   * `handleRequest` bounds every read with `timeout` and keeps successes in
-   * `secretCache`). Null or empty means missing.
-   */
-  readSecret: (handle: string) => Promise<string | null>;
-  /** Bounds every outbound call (flags KV read, secret reads). */
+  /** Bounds every outbound wait (the shared read window). */
   timeout: TimeoutRunner;
   now: () => number;
   random: () => number;
   delay: (ms: number) => Promise<void>;
   log: ReturnType<typeof createLogger>;
-  flagsCache: FlagsCacheBox;
-  secretCache: SecretCacheBox;
+  /** The container's refreshing `flags/global` value (T20). */
+  flags: RefreshingValue<CrmFlags>;
+  /** The container's shared secret reads. */
+  secrets: SecretStore;
+  warmBox: WarmBox;
 }
 
 export async function handleRequest(req: Request, deps: CrmDeps): Promise<Response> {
   const timings = startTimings(deps.now);
+
+  // Warm-up: the container's first request starts the three reads together
+  // and never waits for them. The flags value starts a read only when it
+  // has no value and none in flight; the secret store likewise never
+  // duplicates a read, so this is cheap on every later request.
+  if (!deps.warmBox.warmed) {
+    deps.warmBox.warmed = true;
+    deps.flags.start();
+    void deps.secrets.read(INTERNAL_KEY_HANDLE);
+    void deps.secrets.read(DEMO_PHONE_HANDLE);
+  }
+
   const url = new URL(req.url);
   const match = matchRoute(req.method, url.pathname);
   let status: number;
@@ -129,13 +198,22 @@ export async function handleRequest(req: Request, deps: CrmDeps): Promise<Respon
     status = 200;
     body = { ok: true, svc: SERVICE_NAME };
   } else {
-    const internalKey = await readSecretTimed(deps, timings, "INTERNAL_KEY");
+    // The read window for this request: it opens at the first wait and
+    // bounds every later wait to what remains.
+    let windowStartMs: number | null = null;
+    const remainingMs = (): number => {
+      const t = deps.now();
+      windowStartMs ??= t;
+      return Math.max(0, READ_WINDOW_MS - (t - windowStartMs));
+    };
+
+    const internalKey = await readSecretWithin(deps, timings, INTERNAL_KEY_HANDLE, remainingMs);
     if (!hasValidInternalKey(req.headers.get(INTERNAL_KEY_HEADER), internalKey)) {
       status = 401;
       body = { error: "unauthorized" };
     } else {
       const flags: CrmFlags = await timings.time("kv", () =>
-        getFlags(deps.kv, deps.now, deps.flagsCache, deps.timeout),
+        deps.flags.get(remainingMs()),
       );
       if (flags.fail) {
         status = 503;
@@ -145,7 +223,7 @@ export async function handleRequest(req: Request, deps: CrmDeps): Promise<Respon
           await deps.delay(flags.delayMs);
         }
         if (match.name === "customers") {
-          const demoCallerPhone = await readSecretTimed(deps, timings, "DEMO_CALLER_PHONE");
+          const demoCallerPhone = await readSecretWithin(deps, timings, DEMO_PHONE_HANDLE, remainingMs);
           const outcome = getCustomer(url.searchParams, demoCallerPhone);
           ({ status, body } = outcome);
           caller = outcome.callerPhone;
@@ -167,40 +245,21 @@ export async function handleRequest(req: Request, deps: CrmDeps): Promise<Respon
 }
 
 /**
- * One bounded secret read with a per-container memo (T10 follow-up, issue
- * 14). A kept value answers from the box, still inside the `http` timing
- * hop so the request log shows it at about 0 ms like any other timed call.
- * A miss reads through `deps.readSecret`, bounded by `SECRET_READ_TIMEOUT_MS`.
- * `TIMED_OUT`, a thrown error or an empty value all count as missing (null),
- * so authentication still fails closed — and none of them is kept, so the
- * next request reads again. The raced task itself fills the box, the way
- * `createSecretStore` in voice-tools does, so a success that settles after
- * its timeout fired is still kept and the next request needs no new read.
+ * One wait for a shared secret read, inside the `http` timing hop and
+ * bounded by the request's remaining window. `TIMED_OUT`, an error or an
+ * empty value all count as missing (null), so authentication still fails
+ * closed — and since a failed read is never kept, a later request reads
+ * again. A success that settles after the window closed is kept by the
+ * store and serves the next request.
  */
-async function readSecretTimed(
+async function readSecretWithin(
   deps: CrmDeps,
   timings: Timings,
   handle: string,
+  remainingMs: () => number,
 ): Promise<string | null> {
   return timings.time("http", async () => {
-    const kept = deps.secretCache.values.get(handle);
-    if (kept !== undefined) {
-      return kept;
-    }
-    // Never rejects: a thrown read is a missing secret, and a rejection that
-    // settles after the race was lost must not be left unhandled.
-    const read = async (): Promise<string | null> => {
-      try {
-        const value = await deps.readSecret(handle);
-        if (value !== null && value.length > 0) {
-          deps.secretCache.values.set(handle, value);
-        }
-        return value;
-      } catch {
-        return null;
-      }
-    };
-    const raced = await deps.timeout(read, SECRET_READ_TIMEOUT_MS);
+    const raced = await deps.timeout(() => deps.secrets.read(handle), remainingMs());
     if (raced === TIMED_OUT || raced === null || raced.length === 0) {
       return null;
     }
@@ -229,9 +288,9 @@ function logRequest(
 
 /**
  * Raw secret read for production: the typed binding first (an HTTP call to
- * the secret store — `handleRequest` bounds it with a timeout), then the
- * same-named environment variable, the second production surface the
- * platform injects at deploy time. `telnyx-edge dev` delivers neither —
+ * the secret store — the wait in `handleRequest` bounds it with a timeout),
+ * then the same-named environment variable, the second production surface
+ * the platform injects at deploy time. `telnyx-edge dev` delivers neither —
  * verified on CLI v0.5.10: no secrets emulation and no environment variable
  * passthrough — so this returns null there and keyed routes answer 401.
  */
@@ -248,17 +307,49 @@ async function resolveSecret(env: CrmEnv, handle: string): Promise<string | null
   return fromEnv !== undefined && fromEnv.length > 0 ? fromEnv : null;
 }
 
-/** Flags cache for the life of this module instance (per container). */
-const flagsCache: FlagsCacheBox = { current: null };
+const logger = createLogger(SERVICE_NAME);
 
-/** Kept secret reads for the life of this module instance (per container). */
-const secretCache: SecretCacheBox = { values: new Map() };
+/**
+ * The latest env the platform handed us: the module-scope container readers
+ * (the flags value and the secret store) close over it, because their reads
+ * only ever run while a request — and with it an env — is on the go. One
+ * value per container per kind, created once with the rest of the module,
+ * so a container's first requests are the only ones that ever wait
+ * (DEBUGLOG issue 15).
+ */
+let currentEnv: CrmEnv | undefined;
+
+function requireEnv(): CrmEnv {
+  if (currentEnv === undefined) {
+    throw new Error("mock-crm: no env is set yet");
+  }
+  return currentEnv;
+}
+
+const flagsValue: RefreshingValue<CrmFlags> = createRefreshingValue<CrmFlags>({
+  read: () => readFlagsDocument(requireEnv().KV),
+  lifetimeMs: FLAGS_CACHE_TTL_MS,
+  fallback: DEFAULT_FLAGS,
+  now: () => Date.now(),
+  timeout: realTimeoutRunner,
+  onSettled: (outcome, durationMs) => {
+    logger.log("info", "flags_read", {
+      outcome,
+      latency_ms: { total: durationMs, kv: durationMs },
+    });
+  },
+});
+
+const secretStore: SecretStore = createSecretStore((handle) =>
+  resolveSecret(requireEnv(), handle),
+);
+
+const warmBox: WarmBox = { warmed: false };
 
 export default {
   async fetch(req: Request, env: CrmEnv): Promise<Response> {
+    currentEnv = env;
     return handleRequest(req, {
-      kv: env.KV,
-      readSecret: (handle) => resolveSecret(env, handle),
       timeout: realTimeoutRunner,
       now: () => Date.now(),
       random: () => Math.random(),
@@ -266,9 +357,10 @@ export default {
         new Promise<void>((resolve) => {
           setTimeout(resolve, ms);
         }),
-      log: createLogger(SERVICE_NAME),
-      flagsCache,
-      secretCache,
+      log: logger,
+      flags: flagsValue,
+      secrets: secretStore,
+      warmBox,
     });
   },
 };

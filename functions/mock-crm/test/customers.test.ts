@@ -42,11 +42,14 @@ describe("GET /customers", () => {
     });
   });
 
-  it("does not find the demo account when the secret is absent", async () => {
+  it("answers 503 — not 404 — when the queried digits match no fixture and the secret is absent (T20)", async () => {
     const h = makeHarness({ demoCallerPhone: null });
+    // These digits may be the demo number; with DEMO_CALLER_PHONE
+    // unreadable mock-crm cannot say "not found" for sure.
     const res = await h.call(`/customers?phone=${TEST_DEMO_PHONE.replace("+", "")}`);
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "unavailable" });
   });
 
   it("does not find the demo account by a different number", async () => {

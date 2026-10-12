@@ -9,14 +9,9 @@ import {
   DEFAULT_FLAGS,
   FLAGS_CACHE_TTL_MS,
   FLAGS_TIMEOUT_MS,
-  getFlags,
   parseFlags,
-  TIMED_OUT,
+  readFlagsDocument,
 } from "../src/flags.js";
-import type { TimeoutRunner } from "../src/flags.js";
-
-/** Immediate runner: the task always wins, the timer never fires. */
-const noTimeout: TimeoutRunner = <T>(fn: () => Promise<T>) => fn();
 
 describe("parseFlags", () => {
   it("falls back to the defaults on missing input", () => {
@@ -60,151 +55,54 @@ describe("parseFlags", () => {
   });
 });
 
-describe("getFlags", () => {
-  it("reads flags/global from KV once per ten seconds", async () => {
-    const clock = createClockFake(0);
-    const kv = createKvFake(clock.now);
-    await kv.put(kvKeys.flags(), JSON.stringify({ crm_delay_ms: 500 }));
-    const box = { current: null };
-
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual({
-      delayMs: 500,
-      fail: false,
-    });
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual({
-      delayMs: 500,
-      fail: false,
-    });
-
-    const gets = kv.calls.filter(
-      (c) => c.method === "get" && c.key === kvKeys.flags(),
-    );
-    expect(gets).toHaveLength(1);
-  });
-
-  it("re-reads once the cache is older than ten seconds", async () => {
-    const clock = createClockFake(0);
-    const kv = createKvFake(clock.now);
-    await kv.put(kvKeys.flags(), JSON.stringify({ crm_fail: true }));
-    const box = { current: null };
-
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual({
-      delayMs: 0,
-      fail: true,
-    });
-    clock.advance(FLAGS_CACHE_TTL_MS);
-    await kv.put(kvKeys.flags(), JSON.stringify({ crm_fail: false }));
-
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual({
-      delayMs: 0,
-      fail: false,
-    });
-    expect(kv.calls.filter((c) => c.method === "get")).toHaveLength(2);
-  });
-
-  it("falls back to defaults when KV holds invalid JSON or nothing", async () => {
-    const clock = createClockFake(0);
-    const kv = createKvFake(clock.now);
-    const box = { current: null };
-
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual(DEFAULT_FLAGS);
-
-    box.current = null;
-    await kv.put(kvKeys.flags(), "{not json");
-    expect(await getFlags(kv, clock.now, box, noTimeout)).toEqual(DEFAULT_FLAGS);
-  });
-
-  it("never trusts the cache when the clock is not finite", async () => {
-    const clock = createClockFake(0);
-    const kv = createKvFake(clock.now);
-    await kv.put(kvKeys.flags(), JSON.stringify({ crm_delay_ms: 40 }));
-    const box = { current: null };
-    const brokenNow = () => Number.NaN;
-
-    expect(await getFlags(kv, brokenNow, box, noTimeout)).toEqual({
-      delayMs: 40,
-      fail: false,
-    });
-    expect(await getFlags(kv, brokenNow, box, noTimeout)).toEqual({
-      delayMs: 40,
-      fail: false,
-    });
-
-    // Every call went back to KV: no cache entry is ever trusted.
-    expect(kv.calls.filter((c) => c.method === "get")).toHaveLength(2);
+describe("the production flags timing (T20)", () => {
+  it("keeps the cache lifetime at ten seconds and the request's wait bound at 1,000 ms", () => {
+    // The refreshing flags value's lifetime and the bound a keyed request
+    // waits when no read has ever succeeded, pinned to the card's values.
+    expect(FLAGS_CACHE_TTL_MS).toBe(10_000);
+    expect(FLAGS_TIMEOUT_MS).toBe(1_000);
   });
 });
 
-describe("getFlags timeout", () => {
-  it("gives up on a hanging KV read after 1,000 ms and uses the defaults", async () => {
+describe("readFlagsDocument", () => {
+  it("reads flags/global and resolves with the parsed document", async () => {
     const clock = createClockFake(0);
-    // A KV whose read never settles; only the injected timer can end this.
-    const hangingKv = {
-      get: () => new Promise(() => {}),
-    } as unknown as ReturnType<typeof createKvFake>;
-    let timerMs = -1;
-    let fireTimer!: () => void;
-    const manualTimeout: TimeoutRunner = <T>(fn: () => Promise<T>, ms: number) =>
-      new Promise((resolve) => {
-        timerMs = ms;
-        void fn(); // starts the hanging read; its settlement is ignored
-        fireTimer = () => {
-          resolve(TIMED_OUT);
-        };
-      });
+    const kv = createKvFake(clock.now);
+    await kv.put(kvKeys.flags(), JSON.stringify({ crm_delay_ms: 500, crm_fail: true }));
 
-    const pending = getFlags(hangingKv, clock.now, { current: null }, manualTimeout);
-    fireTimer();
-
-    expect(timerMs).toBe(FLAGS_TIMEOUT_MS);
-    expect(timerMs).toBe(1_000);
-    await expect(pending).resolves.toEqual(DEFAULT_FLAGS);
+    await expect(readFlagsDocument(kv)).resolves.toEqual({ delayMs: 500, fail: true });
+    expect(kv.calls.filter((c) => c.method === "get")).toEqual([
+      { method: "get", key: kvKeys.flags(), options: { type: "json" } },
+    ]);
   });
 
-  it("honours a document that settles after 300 ms but before the 1,000 ms timer fires", async () => {
+  it("a missing key is an answer: it resolves with the defaults, like any other answer", async () => {
     const clock = createClockFake(0);
-    // A KV read the test holds and settles by hand.
-    let resolveRead!: (value: unknown) => void;
-    const heldKv = {
-      get: () =>
-        new Promise<unknown>((resolve) => {
-          resolveRead = resolve;
-        }),
-    } as unknown as ReturnType<typeof createKvFake>;
-    let timerMs = -1;
-    let fired = false;
-    let fireTimer!: () => void;
-    // Settling the task before the fire wins the race, and the fire is then a no-op.
-    const manualTimeout: TimeoutRunner = <T>(fn: () => Promise<T>, ms: number) =>
-      new Promise<T | typeof TIMED_OUT>((resolve) => {
-        timerMs = ms;
-        let done = false;
-        fireTimer = () => {
-          if (!done) {
-            done = true;
-            fired = true;
-            resolve(TIMED_OUT);
-          }
-        };
-        void Promise.resolve()
-          .then(fn)
-          .then((value) => {
-            if (!done) {
-              done = true;
-              resolve(value);
-            }
-          });
-      });
+    const kv = createKvFake(clock.now);
 
-    const pending = getFlags(heldKv, clock.now, { current: null }, manualTimeout);
-    // Let the read start and the timer register; no real time passes.
-    for (let i = 0; i < 10; i++) {
-      await Promise.resolve();
-    }
-    clock.advance(300);
-    resolveRead({ crm_fail: true });
-    await expect(pending).resolves.toEqual({ delayMs: 0, fail: true });
-    expect(timerMs).toBe(1_000);
-    expect(fired).toBe(false);
+    await expect(readFlagsDocument(kv)).resolves.toEqual(DEFAULT_FLAGS);
+  });
+
+  it("a document with an invalid flag falls back flag by flag and still resolves", async () => {
+    const clock = createClockFake(0);
+    const kv = createKvFake(clock.now);
+    await kv.put(kvKeys.flags(), JSON.stringify({ crm_delay_ms: -10, crm_fail: true }));
+    await expect(readFlagsDocument(kv)).resolves.toEqual({ delayMs: 0, fail: true });
+  });
+
+  it("a stored blob that is not JSON at all fails the read, like any KV error", async () => {
+    const clock = createClockFake(0);
+    const kv = createKvFake(clock.now);
+    await kv.put(kvKeys.flags(), "{not json");
+    await expect(readFlagsDocument(kv)).rejects.toThrow();
+  });
+
+  it("rejects when the KV read itself fails, so the failed read keeps nothing", async () => {
+    const broken = {
+      get: () => Promise.reject(new Error("kv down")),
+    };
+    await expect(
+      readFlagsDocument(broken as never),
+    ).rejects.toThrow("kv down");
   });
 });

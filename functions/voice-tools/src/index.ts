@@ -8,13 +8,16 @@
  *
  * The real dependencies are built from `env` here; the route handlers take
  * theirs as an argument so tests inject fakes. Per container, once at
- * module level: the logger, the area-status memory cache (ADR-019) and the
- * secret memo maps. Secrets are read on first use and kept for the
- * container's lifetime; a failed read is not kept, so the next request
- * tries again (and the parsed key cache fails closed too). `telnyx-edge
- * dev` has no secrets and no KV (DEBUGLOG issue 9), so there a secret read
- * resolves null and the keyed routes fail closed — 401 on both — and the
- * KV binding is absent (`kv: undefined` in the deps).
+ * module level: the logger, the area-status memory cache (ADR-019), the
+ * refreshing flags value (T20) and the secret memo maps. Secrets are read
+ * on first use and kept for the container's lifetime; a failed read is not
+ * kept, so the next request tries again (and the parsed key cache fails
+ * closed too). The flags value serves its last good parse with no wait and
+ * refreshes it in the background once its 10 s lifetime has passed, so a
+ * tool call with a last good value never waits for KV (DEBUGLOG issue 15).
+ * `telnyx-edge dev` has no secrets and no KV (DEBUGLOG issue 9), so there a
+ * secret read resolves null and the keyed routes fail closed — 401 on both
+ * — and the KV binding is absent (`kv: undefined` in the deps).
  *
  * Every request writes exactly one log line: the route handlers write
  * theirs, and index.ts writes the `healthz`, `method_not_allowed` (GET
@@ -33,16 +36,17 @@ import { randomBytes } from "node:crypto";
 import type { ActorNamespace, Env, KvNamespace, Secrets } from "@telnyx/edge-runtime";
 
 import { createLogger, createMemoryCache, parseKey, SHARED_VERSION, startTimings } from "@duinvezel/shared";
+import type { RefreshingValue } from "@duinvezel/shared";
 
 import type { AreaStatusDoc } from "./area-status.js";
 import { createAccountsClient } from "./clients/accounts.js";
 import { createAreasClient } from "./clients/areas.js";
 import { createCrmClient } from "./clients/crm.js";
 import { createSessionsClient } from "./clients/sessions.js";
+import { createFlagsValue } from "./flags.js";
 import type { ToolsFlags } from "./flags.js";
 import {
   AREA_CACHE_TTL_MS,
-  FLAG_CACHE_TTL_MS,
   realTimeoutRunner,
   SECRET_READ_TIMEOUT_MS,
   SERVICE_NAME,
@@ -93,10 +97,33 @@ const logger = createLogger(SERVICE_NAME);
 /** The per-container area-status memory cache, created once with the rest of the module (ADR-019). */
 const areaCache = createMemoryCache<AreaStatusDoc | null>(AREA_CACHE_TTL_MS, () => Date.now());
 
-/** The per-container flags memory cache, created once next to the area cache (ADR-019, T19). */
-const flagsCache = createMemoryCache<ToolsFlags>(FLAG_CACHE_TTL_MS, () => Date.now());
+const caches: CachesDep = { areas: areaCache };
 
-const caches: CachesDep = { areas: areaCache, flags: flagsCache };
+/**
+ * The latest env the platform handed us. The flags value's read closes over
+ * it, because that read only ever runs while a request — and with it an
+ * env — is on the go. Under `telnyx-edge dev` there is no KV binding
+ * (DEBUGLOG issue 9), and no request gets the value then.
+ */
+let currentEnv: VoiceToolsEnv | undefined;
+
+/**
+ * The container's refreshing `flags/global` value (T20), created once next
+ * to the area cache. Every settled read writes one `flags_read` line, so
+ * the logs show how long reads take and whether background refreshes
+ * succeed, even when no tool call waited for them.
+ */
+const flagsValue: RefreshingValue<ToolsFlags> = createFlagsValue({
+  kv: () => currentEnv?.KV,
+  now: () => Date.now(),
+  timeout: realTimeoutRunner,
+  onSettled: (outcome, durationMs) => {
+    logger.log("info", "flags_read", {
+      outcome,
+      latency_ms: { total: durationMs, kv: durationMs },
+    });
+  },
+});
 
 /** Per-container secret memo: successes only, so a failed read is retried on the next request. */
 const secretTextCache = new Map<string, string>();
@@ -173,6 +200,7 @@ export function buildDeps(env: VoiceToolsEnv): VoiceToolsDeps {
       fetchImpl: fetch,
     }),
     caches,
+    flagsValue: env.KV === undefined ? undefined : flagsValue,
     secrets,
     log: logger,
     random: (n) => randomBytes(n),
@@ -192,6 +220,7 @@ function logSimple(event: string, req: Request, status: number, latency: Record<
 
 export default {
   async fetch(req: Request, env: VoiceToolsEnv): Promise<Response> {
+    currentEnv = env;
     const url = new URL(req.url);
     const route = matchRoute(req.method, url.pathname);
     switch (route) {

@@ -3,10 +3,18 @@
  * recorded delays, scripted randoms and a captured log sink per test, then a
  * `call` helper that runs a request through `handleRequest`. Nothing here
  * touches a clock, a timer or real I/O, so every test is deterministic.
+ *
+ * Per container (card T20): each harness builds the refreshing flags value,
+ * the shared secret store and the warm-up box fresh, the way index.ts
+ * builds them at module scope for one container. The secret store and the
+ * flags read delegate to swappable seams (`setReadSecret`, `setFlagsKv`),
+ * so a test can replace the underlying stub mid-flight, exactly like it
+ * used to swap `deps.readSecret` and `deps.kv`.
  */
 
 import { kvKeys } from "@duinvezel/shared";
-import { createLogger } from "@duinvezel/shared";
+import { createLogger, createRefreshingValue } from "@duinvezel/shared";
+import type { KvNamespace } from "@telnyx/edge-runtime";
 
 import { createClockFake } from "../../../packages/shared/test/fakes/clock.js";
 import type { ClockFake } from "../../../packages/shared/test/fakes/clock.js";
@@ -15,8 +23,14 @@ import type { KvFake } from "../../../packages/shared/test/fakes/kv.js";
 
 import { handleRequest } from "../src/index.js";
 import type { CrmDeps } from "../src/index.js";
-import { TIMED_OUT } from "../src/flags.js";
-import type { TimeoutRunner } from "../src/flags.js";
+import {
+  DEFAULT_FLAGS,
+  FLAGS_CACHE_TTL_MS,
+  readFlagsDocument,
+  TIMED_OUT,
+} from "../src/flags.js";
+import type { CrmFlags, TimeoutRunner } from "../src/flags.js";
+import { createSecretStore } from "../src/index.js";
 
 /** A promise the test holds and settles by hand; no real time passes. */
 export interface HeldPromise<T> {
@@ -118,10 +132,14 @@ export interface Harness {
   delays: number[];
   /** Consumed scripted randoms; once exhausted, `random` returns 0.5. */
   randoms: number[];
-  /** Raw JSON log lines, one per request. */
+  /** Raw JSON log lines, one per request plus one `flags_read` per settled flags read. */
   lines: string[];
-  /** Every secret handle passed to the injected `readSecret`, in order. */
+  /** Every secret handle passed to the raw secret reader, in order. */
   secretReads: string[];
+  /** Replaces the raw secret reader; the shared store delegates, so mid-test swaps work. */
+  setReadSecret(fn: (handle: string) => Promise<string | null>): void;
+  /** Replaces the KV the flags value reads from; delegated lazily, so mid-test swaps work. */
+  setFlagsKv(kv: KvNamespace): void;
   /** Runs one request. Omit `key` for the right key, `null` for no header. */
   call(
     path: string,
@@ -152,21 +170,23 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const demoCallerPhone =
     options.demoCallerPhone === undefined ? TEST_DEMO_PHONE : options.demoCallerPhone;
 
+  let rawReadSecret = (handle: string): Promise<string | null> => {
+    secretReads.push(handle);
+    if (handle === INTERNAL_KEY_HANDLE) {
+      return Promise.resolve(internalKey);
+    }
+    if (handle === DEMO_PHONE_HANDLE) {
+      return Promise.resolve(demoCallerPhone);
+    }
+    return Promise.resolve(null);
+  };
+  let flagsKv: KvNamespace = kv;
+
   const deps: CrmDeps = {
-    kv,
-    readSecret: (handle) => {
-      secretReads.push(handle);
-      if (handle === INTERNAL_KEY_HANDLE) {
-        return Promise.resolve(internalKey);
-      }
-      if (handle === DEMO_PHONE_HANDLE) {
-        return Promise.resolve(demoCallerPhone);
-      }
-      return Promise.resolve(null);
-    },
     // Immediate runner: the task always wins, the timer never fires. Tests
-    // that exercise a timeout replace `deps.timeout` with a manual one.
-    timeout: <T>(fn: () => Promise<T>, _ms: number) => fn(),
+    // that exercise a timeout replace `deps.timeout` with a manual one; the
+    // flags value delegates, so the swap reaches it.
+    timeout: (<T>(fn: () => Promise<T>) => fn()) as TimeoutRunner,
     now: clock.now,
     random: () => (randoms.length > 0 ? (randoms.shift() as number) : 0.5),
     delay: (ms) => {
@@ -174,8 +194,21 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       return Promise.resolve();
     },
     log,
-    flagsCache: { current: null },
-    secretCache: { values: new Map<string, string>() },
+    flags: createRefreshingValue<CrmFlags>({
+      read: () => readFlagsDocument(flagsKv),
+      lifetimeMs: FLAGS_CACHE_TTL_MS,
+      fallback: DEFAULT_FLAGS,
+      now: clock.now,
+      timeout: ((fn, ms) => deps.timeout(fn, ms)) as TimeoutRunner,
+      onSettled: (outcome, durationMs) => {
+        log.log("info", "flags_read", {
+          outcome,
+          latency_ms: { total: durationMs, kv: durationMs },
+        });
+      },
+    }),
+    secrets: createSecretStore((handle) => rawReadSecret(handle)),
+    warmBox: { warmed: false },
   };
 
   return {
@@ -186,6 +219,12 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     randoms,
     lines,
     secretReads,
+    setReadSecret(fn) {
+      rawReadSecret = fn;
+    },
+    setFlagsKv(next) {
+      flagsKv = next;
+    },
     async call(path, options = {}) {
       const key = options.key === undefined ? TEST_INTERNAL_KEY : options.key;
       const headers: Record<string, string> = {};
@@ -209,7 +248,9 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       } else {
         await kv.put(kvKeys.flags(), JSON.stringify(value));
       }
-      deps.flagsCache.current = null;
+      // No cache reset: the refreshing flags value applies a changed
+      // document within one lifetime — and a test that seeds before its
+      // first request has the document read on that request.
     },
     lastLog() {
       if (lines.length === 0) {

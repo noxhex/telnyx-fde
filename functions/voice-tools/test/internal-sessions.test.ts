@@ -237,7 +237,6 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
   const lines: string[] = [];
   const caches: CachesDep = {
     areas: createMemoryCache(10_000, clock.now),
-    flags: createMemoryCache(10_000, clock.now),
   };
   const log = createLogger(
     "voice-tools",
@@ -259,6 +258,7 @@ function makeHarness(secretValues: Record<string, string | null> = {}): Harness 
     accounts: accountsNever,
     areas: areasNever,
     caches,
+    flagsValue: undefined, // no KV in this harness, so the flag defaults would apply
     secrets,
     log,
     random: () => pinnedSidBytes,
