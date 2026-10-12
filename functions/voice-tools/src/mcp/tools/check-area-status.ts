@@ -17,10 +17,26 @@ import { areaNameForPostcode } from "@duinvezel/shared";
 import { readAreaStatus } from "../../area-status.js";
 import type { ToolContext } from "../server.js";
 
+/**
+ * A JSON number becomes its string as JavaScript writes it, before any other
+ * check (T10 follow-up: the model, and MCP Inspector's `--tool-arg`, may send
+ * `8630` where the tool expects `"8630"`); `8630` then passes the four-digit
+ * check and `8630.5` fails it, exactly as the same text does as a string.
+ * Every other type stays untouched and fails with "must be a string".
+ * `z.preprocess` publishes the output side, so `tools/list` still shows the
+ * postcode as a plain string.
+ */
+function numberToString(value: unknown): unknown {
+  return typeof value === "number" ? String(value) : value;
+}
+
 export const checkAreaStatusInput = z.strictObject({
-  postcode: z
-    .string({ error: "must be a string" })
-    .regex(/^\d{4}$/, "must be exactly four digits"),
+  postcode: z.preprocess(
+    numberToString,
+    z
+      .string({ error: "must be a string" })
+      .regex(/^\d{4}$/, "must be exactly four digits"),
+  ),
 });
 
 export const CHECK_AREA_STATUS_NAME = "check_area_status";

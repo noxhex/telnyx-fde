@@ -41,8 +41,14 @@ export const DEFAULT_FLAGS: CrmFlags = Object.freeze({ delayMs: 0, fail: false }
 
 export const FLAGS_CACHE_TTL_MS = 10_000;
 
-/** The KV read budget — the same 300 ms T07 gives KV. */
-export const FLAGS_TIMEOUT_MS = 300;
+/**
+ * The KV read budget. A KV read takes about 0.8 s from inside a function
+ * (DEBUGLOG issue 11), so the old 300 ms bound meant the flags never applied
+ * on the deployed function (issue 14). 1,000 ms is what voice-tools and
+ * voice-context give the same read (ADR-019). The ten-second cache and the
+ * defaults on a timeout stay as they are.
+ */
+export const FLAGS_TIMEOUT_MS = 1_000;
 
 /** What a `TimeoutRunner` resolves with when its timer wins the race. */
 export const TIMED_OUT: unique symbol = Symbol("timed_out");

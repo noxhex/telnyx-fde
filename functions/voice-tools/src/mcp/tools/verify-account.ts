@@ -48,20 +48,38 @@ import type { CrmAccount } from "../../clients/crm.js";
 import { TIMED_OUT, TIMEOUTS } from "../../config.js";
 import type { ToolContext, ToolResult } from "../server.js";
 
+/**
+ * A JSON number becomes its string as JavaScript writes it, before any other
+ * check (T10 follow-up: the model, and MCP Inspector's `--tool-arg`, may send
+ * `8630` where the tool expects `"8630"`). After the conversion the value
+ * takes exactly the path the same text takes as a string. Every other type
+ * stays untouched, so it fails the string check with "must be a string".
+ * `z.preprocess` publishes the output side, so `tools/list` still shows the
+ * arguments as plain strings.
+ */
+function numberToString(value: unknown): unknown {
+  return typeof value === "number" ? String(value) : value;
+}
+
 export const verifyAccountInput = z.strictObject({
-  postcode: z
-    .string({ error: "must be a string" })
-    .max(32, "must be at most 32 characters")
-    .describe(
-      "The caller's postcode. Expected format: four digits; spoken forms such as \"86 30\" or \"B-8630\" are cleaned by the tool.",
-    ),
-  account_number: z
-    .string({ error: "must be a string" })
-    .max(32, "must be at most 32 characters")
-    .describe(
-      "The caller's account number. Expected format: DV- followed by six digits; spoken forms such as \"dv 100001\" or the six digits alone are cleaned by the tool.",
-    )
-    .optional(),
+  postcode: z.preprocess(
+    numberToString,
+    z
+      .string({ error: "must be a string" })
+      .max(32, "must be at most 32 characters")
+      .describe(
+        "The caller's postcode. Expected format: four digits; spoken forms such as \"86 30\" or \"B-8630\" are cleaned by the tool.",
+      ),
+  ),
+  account_number: z.preprocess(
+    numberToString,
+    z
+      .string({ error: "must be a string" })
+      .max(32, "must be at most 32 characters")
+      .describe(
+        "The caller's account number. Expected format: DV- followed by six digits; spoken forms such as \"dv 100001\" or the six digits alone are cleaned by the tool.",
+      ),
+  ).optional(),
 });
 
 export const VERIFY_ACCOUNT_NAME = "verify_account";

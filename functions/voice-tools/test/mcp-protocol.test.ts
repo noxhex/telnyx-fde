@@ -456,6 +456,34 @@ describe("tools/list", () => {
     });
   });
 
+  it("publishes the three string properties exactly, so they cannot gain a number type (T10 follow-up)", async () => {
+    const h = makeHarness();
+    const res = await h.post({ jsonrpc: "2.0", id: 6, method: "tools/list" });
+    const body = JSON.parse(res.text) as {
+      result: {
+        tools: { name: string; inputSchema: { properties: Record<string, unknown> } }[];
+      };
+    };
+    const byName = new Map(body.result.tools.map((tool) => [tool.name, tool]));
+    expect(byName.get("verify_account")?.inputSchema.properties).toEqual({
+      postcode: {
+        type: "string",
+        maxLength: 32,
+        description:
+          "The caller's postcode. Expected format: four digits; spoken forms such as \"86 30\" or \"B-8630\" are cleaned by the tool.",
+      },
+      account_number: {
+        type: "string",
+        maxLength: 32,
+        description:
+          "The caller's account number. Expected format: DV- followed by six digits; spoken forms such as \"dv 100001\" or the six digits alone are cleaned by the tool.",
+      },
+    });
+    expect(byName.get("check_area_status")?.inputSchema.properties).toEqual({
+      postcode: { type: "string", pattern: "^\\d{4}$" },
+    });
+  });
+
   it("tools/call dispatches against the caller's session (outage answer)", async () => {
     const h = makeHarness();
     // Postcode 9999 is outside the five areas: a fixed answer, no KV needed.

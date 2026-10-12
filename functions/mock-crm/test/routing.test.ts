@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import { matchRoute } from "../src/index.js";
 import {
   DEMO_PHONE_HANDLE,
+  hold,
   INTERNAL_KEY_HANDLE,
   makeHarness,
+  manualTimeout,
+  TEST_DEMO_PHONE,
   TEST_INTERNAL_KEY,
+  tick,
 } from "./helpers.js";
 
 describe("routing", () => {
@@ -96,6 +100,91 @@ describe("secret reads per route", () => {
   });
 });
 
+describe("secrets kept per container (T10 follow-up)", () => {
+  it("two keyed requests read INTERNAL_KEY once", async () => {
+    const h = makeHarness();
+    const first = await h.call("/accounts/DV-100002");
+    const second = await h.call("/lines/LN-000002/test", { method: "POST" });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(h.secretReads).toEqual([INTERNAL_KEY_HANDLE]);
+  });
+
+  it("two lookups of the demo number read DEMO_CALLER_PHONE once and both find the demo account", async () => {
+    const h = makeHarness();
+    const path = `/customers?phone=${TEST_DEMO_PHONE.replace("+", "")}`;
+    const first = await h.call(path);
+    const second = await h.call(path);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body).toMatchObject({ accountNumber: "DV-100001" });
+    expect(second.body).toEqual(first.body);
+    expect(h.secretReads).toEqual([INTERNAL_KEY_HANDLE, DEMO_PHONE_HANDLE]);
+  });
+
+  it("a timed-out read is not kept: the next request reads again", async () => {
+    const h = makeHarness();
+    const manual = manualTimeout();
+    h.deps.timeout = manual.runner;
+    const held = hold<string | null>();
+    const reads: string[] = [];
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return held.promise;
+    };
+
+    const pending = h.call("/accounts/DV-100002");
+    await tick();
+    manual.timers[0]?.fire();
+    expect((await pending).status).toBe(401);
+
+    // Nothing was kept, so the next request reads again and gets in.
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return Promise.resolve(handle === INTERNAL_KEY_HANDLE ? TEST_INTERNAL_KEY : TEST_DEMO_PHONE);
+    };
+    expect((await h.call("/accounts/DV-100002")).status).toBe(200);
+    expect(reads).toEqual([INTERNAL_KEY_HANDLE, INTERNAL_KEY_HANDLE]);
+  });
+
+  it("a thrown read is not kept: the next request reads again", async () => {
+    const h = makeHarness();
+    const reads: string[] = [];
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return Promise.reject(new Error("secret store down"));
+    };
+    expect((await h.call("/accounts/DV-100002")).status).toBe(401);
+
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return Promise.resolve(handle === INTERNAL_KEY_HANDLE ? TEST_INTERNAL_KEY : TEST_DEMO_PHONE);
+    };
+    expect((await h.call("/accounts/DV-100002")).status).toBe(200);
+    expect(reads).toEqual([INTERNAL_KEY_HANDLE, INTERNAL_KEY_HANDLE]);
+  });
+
+  it("an empty read is not kept: the next request reads again", async () => {
+    const h = makeHarness({ internalKey: "" });
+    const reads: string[] = [];
+    const underlying = h.deps.readSecret;
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return underlying(handle);
+    };
+    expect((await h.call("/accounts/DV-100002")).status).toBe(401);
+
+    h.deps.readSecret = (handle) => {
+      reads.push(handle);
+      return Promise.resolve(handle === INTERNAL_KEY_HANDLE ? TEST_INTERNAL_KEY : TEST_DEMO_PHONE);
+    };
+    expect((await h.call("/accounts/DV-100002")).status).toBe(200);
+    expect(reads).toEqual([INTERNAL_KEY_HANDLE, INTERNAL_KEY_HANDLE]);
+  });
+});
+
 describe("fault-injection flags", () => {
   it("crm_fail answers 503 unavailable on the routes but not on /healthz", async () => {
     const h = makeHarness();
@@ -139,6 +228,65 @@ describe("fault-injection flags", () => {
 
     expect(res.status).toBe(200);
     expect(h.delays).toHaveLength(0);
+  });
+
+  it("a flags read settling after 300 ms but inside the 1,000 ms bound applies crm_fail", async () => {
+    const h = makeHarness();
+    const manual = manualTimeout();
+    h.deps.timeout = manual.runner;
+    const heldFlags = hold<unknown>();
+    h.deps.kv = {
+      get: () => heldFlags.promise,
+    } as unknown as typeof h.deps.kv;
+
+    const pending = h.call("/customers?phone=3258000001");
+    await tick();
+    // timers[0] is the secret read, won immediately; the flags read is last.
+    const flagsTimer = manual.timers.at(-1);
+    expect(flagsTimer?.ms).toBe(1_000);
+
+    // The document lands after 300 ms but before the timer fires.
+    h.clock.advance(300);
+    heldFlags.resolve({ crm_fail: true });
+    const res = await pending;
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "unavailable" });
+    expect(flagsTimer?.fired).toBe(false);
+  });
+
+  it("a flags read still pending when the timer fires gives the defaults, and the late settlement changes nothing", async () => {
+    const h = makeHarness();
+    const manual = manualTimeout();
+    h.deps.timeout = manual.runner;
+    let gets = 0;
+    const heldFlags = hold<unknown>();
+    h.deps.kv = {
+      get: () => {
+        gets += 1;
+        return heldFlags.promise;
+      },
+    } as unknown as typeof h.deps.kv;
+
+    const pending = h.call("/accounts/DV-100002");
+    await tick();
+    const flagsTimer = manual.timers.at(-1);
+    expect(flagsTimer?.ms).toBe(1_000);
+    flagsTimer?.fire();
+    const res = await pending;
+
+    // The defaults apply: no fail, no delay, the route answers.
+    expect(res.status).toBe(200);
+    expect(h.delays).toHaveLength(0);
+
+    // The late document changes nothing — and the timed-out read kept the
+    // defaults cached for ten seconds as now, so the next request does not
+    // even read KV again.
+    heldFlags.resolve({ crm_fail: true });
+    await tick();
+    const again = await h.call("/accounts/DV-100002");
+    expect(again.status).toBe(200);
+    expect(gets).toBe(1);
   });
 });
 

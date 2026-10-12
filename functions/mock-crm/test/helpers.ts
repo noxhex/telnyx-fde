@@ -15,6 +15,85 @@ import type { KvFake } from "../../../packages/shared/test/fakes/kv.js";
 
 import { handleRequest } from "../src/index.js";
 import type { CrmDeps } from "../src/index.js";
+import { TIMED_OUT } from "../src/flags.js";
+import type { TimeoutRunner } from "../src/flags.js";
+
+/** A promise the test holds and settles by hand; no real time passes. */
+export interface HeldPromise<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+}
+
+export function hold<T>(): HeldPromise<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Flushes the microtask queue so a handler awaiting held promises advances. */
+export async function tick(rounds = 30): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await Promise.resolve();
+  }
+}
+
+/** One manual timer: the runner's `ms`, and whether the fire or the task won. */
+export interface ManualTimer {
+  ms: number;
+  fired: boolean;
+  settled: boolean;
+  fire(): void;
+}
+
+/**
+ * A TimeoutRunner whose timers fire only when the test says so; tasks start
+ * immediately, and a task that settles before its timer fires wins the race.
+ * Late settlements are handled no-ops.
+ */
+export function manualTimeout(): { runner: TimeoutRunner; timers: ManualTimer[] } {
+  const timers: ManualTimer[] = [];
+  const runner: TimeoutRunner = <T>(fn: () => Promise<T>, ms: number) =>
+    new Promise<T | typeof TIMED_OUT>((resolve, reject) => {
+      let done = false;
+      const timer: ManualTimer = {
+        ms,
+        fired: false,
+        settled: false,
+        fire() {
+          if (!done) {
+            done = true;
+            this.fired = true;
+            resolve(TIMED_OUT);
+          }
+        },
+      };
+      timers.push(timer);
+      Promise.resolve()
+        .then(fn)
+        .then(
+          (value) => {
+            if (!done) {
+              done = true;
+              timer.settled = true;
+              resolve(value);
+            }
+          },
+          (error: unknown) => {
+            if (!done) {
+              done = true;
+              timer.settled = true;
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          },
+        );
+    });
+  return { runner, timers };
+}
 
 /** Stand-in secrets, generated per test run by the tester, never real. */
 export const TEST_INTERNAL_KEY = "9f8c2a-test-internal-key";
@@ -96,6 +175,7 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
     },
     log,
     flagsCache: { current: null },
+    secretCache: { values: new Map<string, string>() },
   };
 
   return {

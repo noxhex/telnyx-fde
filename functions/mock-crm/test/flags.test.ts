@@ -136,7 +136,7 @@ describe("getFlags", () => {
 });
 
 describe("getFlags timeout", () => {
-  it("gives up on a hanging KV read after 300 ms and uses the defaults", async () => {
+  it("gives up on a hanging KV read after 1,000 ms and uses the defaults", async () => {
     const clock = createClockFake(0);
     // A KV whose read never settles; only the injected timer can end this.
     const hangingKv = {
@@ -157,7 +157,54 @@ describe("getFlags timeout", () => {
     fireTimer();
 
     expect(timerMs).toBe(FLAGS_TIMEOUT_MS);
-    expect(timerMs).toBe(300);
+    expect(timerMs).toBe(1_000);
     await expect(pending).resolves.toEqual(DEFAULT_FLAGS);
+  });
+
+  it("honours a document that settles after 300 ms but before the 1,000 ms timer fires", async () => {
+    const clock = createClockFake(0);
+    // A KV read the test holds and settles by hand.
+    let resolveRead!: (value: unknown) => void;
+    const heldKv = {
+      get: () =>
+        new Promise<unknown>((resolve) => {
+          resolveRead = resolve;
+        }),
+    } as unknown as ReturnType<typeof createKvFake>;
+    let timerMs = -1;
+    let fired = false;
+    let fireTimer!: () => void;
+    // Settling the task before the fire wins the race, and the fire is then a no-op.
+    const manualTimeout: TimeoutRunner = <T>(fn: () => Promise<T>, ms: number) =>
+      new Promise<T | typeof TIMED_OUT>((resolve) => {
+        timerMs = ms;
+        let done = false;
+        fireTimer = () => {
+          if (!done) {
+            done = true;
+            fired = true;
+            resolve(TIMED_OUT);
+          }
+        };
+        void Promise.resolve()
+          .then(fn)
+          .then((value) => {
+            if (!done) {
+              done = true;
+              resolve(value);
+            }
+          });
+      });
+
+    const pending = getFlags(heldKv, clock.now, { current: null }, manualTimeout);
+    // Let the read start and the timer register; no real time passes.
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+    clock.advance(300);
+    resolveRead({ crm_fail: true });
+    await expect(pending).resolves.toEqual({ delayMs: 0, fail: true });
+    expect(timerMs).toBe(1_000);
+    expect(fired).toBe(false);
   });
 });

@@ -4,10 +4,14 @@ import { hasValidInternalKey } from "../src/auth.js";
 import { SECRET_READ_TIMEOUT_MS } from "../src/index.js";
 import { TIMED_OUT } from "../src/flags.js";
 import {
+  hold,
   INTERNAL_KEY_HANDLE,
   makeHarness,
+  manualTimeout,
   TEST_INTERNAL_KEY,
+  tick,
 } from "./helpers.js";
+import type { HeldPromise } from "./helpers.js";
 
 describe("hasValidInternalKey", () => {
   it("accepts the exact key", () => {
@@ -104,5 +108,58 @@ describe("internal key on the routes", () => {
     expect(log).toMatchObject({ event: "crm_request", route: "accounts", status: 401 });
     expect(log).not.toHaveProperty("caller");
     expect(log).not.toHaveProperty("account");
+  });
+});
+
+describe("the bounded INTERNAL_KEY read, kept per container (T10 follow-up)", () => {
+  it("answers 200 when the read settles after 300 ms but before the 1,000 ms timer fires", async () => {
+    const h = makeHarness();
+    const manual = manualTimeout();
+    h.deps.timeout = manual.runner;
+    const held = hold<string | null>();
+    h.deps.readSecret = () => held.promise;
+
+    const pending = h.call("/accounts/DV-100002");
+    await tick();
+    const timer = manual.timers[0];
+    expect(timer?.ms).toBe(SECRET_READ_TIMEOUT_MS);
+    expect(timer?.ms).toBe(1_000);
+
+    // The read lands after 300 ms but before the timer fires.
+    h.clock.advance(300);
+    held.resolve(TEST_INTERNAL_KEY);
+    const res = await pending;
+
+    expect(res.status).toBe(200);
+    expect(timer?.fired).toBe(false);
+  });
+
+  it("answers 401 when the timer wins; the late success is kept, so the next request needs no new read", async () => {
+    const h = makeHarness();
+    const manual = manualTimeout();
+    h.deps.timeout = manual.runner;
+    let reads = 0;
+    const heldReads: HeldPromise<string | null>[] = [];
+    h.deps.readSecret = () => {
+      reads += 1;
+      const held = hold<string | null>();
+      heldReads.push(held);
+      return held.promise;
+    };
+
+    const pending = h.call("/accounts/DV-100002");
+    await tick();
+    manual.timers[0]?.fire();
+    const res = await pending;
+    expect(res.status).toBe(401);
+
+    // Settling that read afterwards changes nothing for the answered request
+    // — but the late success is kept, so the next request needs no new read.
+    heldReads[0]?.resolve(TEST_INTERNAL_KEY);
+    await tick();
+    const second = await h.call("/accounts/DV-100002");
+
+    expect(second.status).toBe(200);
+    expect(reads).toBe(1);
   });
 });

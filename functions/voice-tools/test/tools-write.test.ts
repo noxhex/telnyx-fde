@@ -59,6 +59,14 @@ const ACCOUNT_DOC: CrmAccount = {
   lineId: "LN-000003",
 };
 
+/** mock-crm's DV-100001 fixture shape. */
+const ACCOUNT_100001: CrmAccount = {
+  accountNumber: "DV-100001",
+  firstName: "Thiago",
+  postcode: "8630",
+  lineId: "LN-000001",
+};
+
 function makeSession(overrides: Partial<SessionDoc> = {}): SessionDoc {
   return {
     v: 1,
@@ -776,14 +784,6 @@ describe("verify_account: the attempt that locks the account", () => {
 });
 
 describe("verify_account spoken forms", () => {
-  /** mock-crm's DV-100001 fixture shape. */
-  const ACCOUNT_100001: CrmAccount = {
-    accountNumber: "DV-100001",
-    firstName: "Thiago",
-    postcode: "8630",
-    lineId: "LN-000001",
-  };
-
   it.each(["dv-100001", "DV 100001", "DV100001", "DV.100.001", "100001"])(
     "the spoken form %s reaches the CRM, the actor and the session as DV-100001",
     async (spoken) => {
@@ -873,6 +873,108 @@ describe("verify_account spoken forms", () => {
   });
 });
 
+// ---------- JSON numbers (T10 follow-up) ----------
+
+describe("verify_account JSON numbers", () => {
+  it("a number for the postcode answers what the string answers in postcode mode, and the actor receives the string", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "number_match" }),
+    });
+    h.crm.accountOutcome = {
+      kind: "found",
+      account: {
+        accountNumber: "DV-100002",
+        firstName: "Marie",
+        postcode: "8630",
+        lineId: "LN-000002",
+      },
+    };
+    const answer = await h.callTool("verify_account", { postcode: 8630 });
+    expect(answer.result).toEqual({
+      verified: true,
+      first_name: "Marie",
+      area_name: "Veurne",
+      area_outage: false,
+      outage_eta: null,
+    });
+    expect(h.accounts.verifies[0]?.input).toEqual({
+      mode: "postcode",
+      submitted: { postcode: "8630" },
+      expected: { postcode: "8630", accountNumber: "DV-100002" },
+      nowMs: T0,
+    });
+  });
+
+  it("a number for the postcode answers what the string answers in full mode, and the actor receives the string", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "anonymous", accountNumber: null, postcode: null, lineId: null }),
+      areaDocs: { "8630": OUTAGE_DOC },
+    });
+    const answer = await h.callTool("verify_account", {
+      postcode: 8630,
+      account_number: "DV-100003",
+    });
+    expect(answer.result).toEqual({
+      verified: true,
+      first_name: "Jan",
+      area_name: "Veurne",
+      area_outage: true,
+      outage_eta: "by 18:00 today",
+    });
+    expect(h.accounts.verifies[0]?.input.mode).toBe("full");
+    expect(h.accounts.verifies[0]?.input.submitted).toEqual({
+      postcode: "8630",
+      accountNumber: "DV-100003",
+    });
+  });
+
+  it("a number for the account number reaches the CRM and the actor as DV-100001", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "anonymous", accountNumber: null, postcode: null, lineId: null }),
+    });
+    h.crm.accountOutcome = { kind: "found", account: ACCOUNT_100001 };
+    const answer = await h.callTool("verify_account", {
+      postcode: "8630",
+      account_number: 100001,
+    });
+    expect(answer.result).toMatchObject({ verified: true, first_name: "Thiago" });
+    expect(h.crm.accountCalls).toEqual(["DV-100001"]);
+    expect(h.accounts.verifies[0]?.input.submitted).toEqual({
+      postcode: "8630",
+      accountNumber: "DV-100001",
+    });
+    expect(h.sessions.verified[0]?.input.accountNumber).toBe("DV-100001");
+  });
+
+  it("a five-digit number answers account_number_unclear with no call and nothing counted", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "anonymous", accountNumber: null, postcode: null, lineId: null }),
+    });
+    const answer = await h.callTool("verify_account", {
+      postcode: "8630",
+      account_number: 10001,
+    });
+    expect(answer.result).toEqual({ verified: false, account_number_unclear: true });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
+    expect(h.sessions.failures).toEqual([]);
+    expect(h.sessions.verified).toEqual([]);
+    expect(kvCalls(h)).toEqual([]);
+    expect(answer.logLine).toMatchObject({ outcome: "ok" });
+  });
+
+  it("8630.5 takes the string path: cleaned, it is not four digits, so postcode_unclear with nothing counted", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    const answer = await h.callTool("verify_account", { postcode: 8630.5 });
+    expect(answer.result).toEqual({ verified: false, postcode_unclear: true });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
+    expect(h.sessions.failures).toEqual([]);
+    expect(kvCalls(h)).toEqual([]);
+    expect(answer.logLine).toMatchObject({ outcome: "ok" });
+  });
+});
+
 // ---------- invalid arguments (SEP-1303) ----------
 
 describe("invalid arguments are isError results naming the argument", () => {
@@ -884,6 +986,24 @@ describe("invalid arguments are isError results naming the argument", () => {
     expect(answer.rpcError).toBeNull();
     expect(answer.logLine).toMatchObject({ outcome: "error", tool: "verify_account" });
     expect(h.crm.accountCalls).toEqual([]);
+  });
+
+  // Only a JSON number becomes a string (T10 follow-up); every other type
+  // still answers "<argument> must be a string."
+  it.each([
+    [{ postcode: true }, "postcode"],
+    [{ postcode: null }, "postcode"],
+    [{ postcode: "8630", account_number: true }, "account_number"],
+    [{ postcode: "8630", account_number: null }, "account_number"],
+  ])("verify_account: %j answers isError naming %s", async (args, field) => {
+    const h = makeHarness({});
+    const answer = await h.callTool("verify_account", args);
+    expect(answer.isErrorText).toBe(`${field} must be a string.`);
+    expect(answer.result).toBeNull();
+    expect(answer.rpcError).toBeNull();
+    expect(answer.logLine).toMatchObject({ outcome: "error", tool: "verify_account" });
+    expect(h.crm.accountCalls).toEqual([]);
+    expect(h.accounts.verifies).toEqual([]);
   });
 
   it("report_outage: an unknown symptom names symptom, in the card's own words", async () => {

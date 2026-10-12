@@ -10,7 +10,9 @@
  *      secret costs a network hop only matched routes should pay for);
  *   2. the secret read — a matched route reads `INTERNAL_KEY` after routing
  *      and before auth, bounded by `SECRET_READ_TIMEOUT_MS`; a secret that
- *      cannot be read in time counts as missing, so auth fails closed 401;
+ *      cannot be read in time counts as missing, so auth fails closed 401.
+ *      Successful reads are kept per container (issue 14: a deployed read
+ *      costs 0.55 to 0.75 s), so only the first keyed request pays for them;
  *   3. auth — a missing or wrong `x-internal-key` is a 401 before anything
  *      else happens (no KV, no flags, no handler);
  *   4. flags — `crm_fail` answers 503 `{ "error": "unavailable" }`, then
@@ -40,8 +42,13 @@ import { runLineTestRoute } from "./routes/lines.js";
 
 const SERVICE_NAME = "mock-crm";
 
-/** A secret read is one HTTP hop to the sidecar; bound it like the KV hop. */
-export const SECRET_READ_TIMEOUT_MS = 300;
+/**
+ * A secret read is one HTTP hop to the sidecar; deployed, the first read in
+ * a container takes 0.55 to 0.75 s (DEBUGLOG issue 14), so the old 300 ms
+ * bound timed every read out. 1,000 ms is what voice-tools and voice-context
+ * give the same call.
+ */
+export const SECRET_READ_TIMEOUT_MS = 1_000;
 
 /** The bindings this function declares in telnyx.toml. */
 export interface CrmEnv extends Env {
@@ -78,12 +85,22 @@ export function matchRoute(method: string, pathname: string): RouteMatch {
   return { name: "not_found", param: null };
 }
 
+/**
+ * Successful secret reads, kept for the life of a container (issue 14). The
+ * caller owns the box the way it owns the flags cache: production creates it
+ * once at module scope, each test harness creates a fresh one.
+ */
+export interface SecretCacheBox {
+  values: Map<string, string>;
+}
+
 /** Everything `handleRequest` needs; tests inject fakes and stubs. */
 export interface CrmDeps {
   kv: KvNamespace;
   /**
-   * Reads one secret by handle (raw: no timeout in here — `handleRequest`
-   * bounds every read with `timeout`). Null or empty means missing.
+   * Reads one secret by handle (raw: no timeout and no memo in here —
+   * `handleRequest` bounds every read with `timeout` and keeps successes in
+   * `secretCache`). Null or empty means missing.
    */
   readSecret: (handle: string) => Promise<string | null>;
   /** Bounds every outbound call (flags KV read, secret reads). */
@@ -93,6 +110,7 @@ export interface CrmDeps {
   delay: (ms: number) => Promise<void>;
   log: ReturnType<typeof createLogger>;
   flagsCache: FlagsCacheBox;
+  secretCache: SecretCacheBox;
 }
 
 export async function handleRequest(req: Request, deps: CrmDeps): Promise<Response> {
@@ -149,28 +167,45 @@ export async function handleRequest(req: Request, deps: CrmDeps): Promise<Respon
 }
 
 /**
- * One bounded secret read: `TIMED_OUT`, a thrown error or an empty value all
- * count as missing (null), so authentication still fails closed when the
- * secret store cannot answer in time. The read is wrapped in the `http`
- * timing hop so the request log carries its latency like any other
- * outbound call.
+ * One bounded secret read with a per-container memo (T10 follow-up, issue
+ * 14). A kept value answers from the box, still inside the `http` timing
+ * hop so the request log shows it at about 0 ms like any other timed call.
+ * A miss reads through `deps.readSecret`, bounded by `SECRET_READ_TIMEOUT_MS`.
+ * `TIMED_OUT`, a thrown error or an empty value all count as missing (null),
+ * so authentication still fails closed — and none of them is kept, so the
+ * next request reads again. The raced task itself fills the box, the way
+ * `createSecretStore` in voice-tools does, so a success that settles after
+ * its timeout fired is still kept and the next request needs no new read.
  */
 async function readSecretTimed(
   deps: CrmDeps,
   timings: Timings,
   handle: string,
 ): Promise<string | null> {
-  try {
-    const value = await timings.time("http", () =>
-      deps.timeout(() => deps.readSecret(handle), SECRET_READ_TIMEOUT_MS),
-    );
-    if (value === TIMED_OUT || value === null || value.length === 0) {
+  return timings.time("http", async () => {
+    const kept = deps.secretCache.values.get(handle);
+    if (kept !== undefined) {
+      return kept;
+    }
+    // Never rejects: a thrown read is a missing secret, and a rejection that
+    // settles after the race was lost must not be left unhandled.
+    const read = async (): Promise<string | null> => {
+      try {
+        const value = await deps.readSecret(handle);
+        if (value !== null && value.length > 0) {
+          deps.secretCache.values.set(handle, value);
+        }
+        return value;
+      } catch {
+        return null;
+      }
+    };
+    const raced = await deps.timeout(read, SECRET_READ_TIMEOUT_MS);
+    if (raced === TIMED_OUT || raced === null || raced.length === 0) {
       return null;
     }
-    return value;
-  } catch {
-    return null;
-  }
+    return raced;
+  });
 }
 
 /** The one log line per request. */
@@ -216,6 +251,9 @@ async function resolveSecret(env: CrmEnv, handle: string): Promise<string | null
 /** Flags cache for the life of this module instance (per container). */
 const flagsCache: FlagsCacheBox = { current: null };
 
+/** Kept secret reads for the life of this module instance (per container). */
+const secretCache: SecretCacheBox = { values: new Map() };
+
 export default {
   async fetch(req: Request, env: CrmEnv): Promise<Response> {
     return handleRequest(req, {
@@ -230,6 +268,7 @@ export default {
         }),
       log: createLogger(SERVICE_NAME),
       flagsCache,
+      secretCache,
     });
   },
 };

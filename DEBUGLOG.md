@@ -371,7 +371,7 @@ voice-tools and voice-context read the same secrets through the same `env.SECRET
 
 **Cause.** A secret read is an HTTP call through the Dapr sidecar (issue 9), and deployed it took 0.55 to 0.75 s the first time in a container. mock-crm bounded every read at 300 ms and kept nothing, so each request read again and each read timed out. A secret that cannot be read counts as missing, and authentication failed closed with 401, as designed. `DEMO_CALLER_PHONE` has the same bound and no memo, so the demo number could not have matched either. `telnyx-edge dev` has no secrets binding (issue 9), so T10 was the first time this path ran. The flags read has the same flaw. `FLAGS_TIMEOUT_MS` is 300 ms where a KV read takes about 0.8 s (issue 11), so `crm_fail` and `crm_delay_ms` would never apply on the deployed function. No request got that far in T10.
 
-**Fix.** The T10 follow-up (T10 card, Follow-up of 12 October). mock-crm keeps each secret after its first successful read, as the other two functions do, and bounds secret reads and the flags read at 1,000 ms, their value. mock-crm gets shipped again.
+**Fix.** The T10 follow-up (T10 card, Follow-up of 12 October). mock-crm keeps each secret after its first successful read, as the other two functions do, and bounds secret reads and the flags read at 1,000 ms, their value. Claude Code's probe of the real handler, with a secret read of 600 ms, answered the first keyed request in 1.2 s and the next three in 0 ms with one read of each secret. mock-crm gets shipped again.
 
 **Design impact.** A secret read costs 0.55 to 0.75 s once per container, and the call setup budget in `docs/ARCHITECTURE.md` has no line for it (T10 measurements below).
 

@@ -423,6 +423,53 @@ describe("check_area_status", () => {
   });
 });
 
+// ---------- JSON numbers (T10 follow-up) ----------
+
+describe("check_area_status JSON numbers", () => {
+  it("the number 8630 answers what the string answers", async () => {
+    const h = makeHarness({ areaDocs: { "8630": OUTAGE_DOC } });
+    const numeric = await h.callTool("check_area_status", { postcode: 8630 });
+    const stringy = await h.callTool("check_area_status", { postcode: "8630" });
+
+    expect(numeric.result).toEqual({
+      area_name: "Veurne",
+      state: "outage",
+      eta: "Tuesday around 18:00",
+    });
+    expect(numeric.result).toEqual(stringy.result);
+  });
+
+  it("8630.5 takes the string path: it fails the four-digit check exactly as the text does", async () => {
+    const h = makeHarness({});
+    // check_area_status has no spoken-form cleaning: "8630.5" fails the
+    // four-digit regex, with isError naming the argument.
+    const answer = await h.callTool("check_area_status", { postcode: 8630.5 });
+    expect(answer.isErrorText).toBe("postcode must be exactly four digits.");
+    expect(h.kv.calls).toEqual([]);
+  });
+
+  it("the number 86300 answers isError with a sentence that names postcode", async () => {
+    const h = makeHarness({});
+    const answer = await h.callTool("check_area_status", { postcode: 86300 });
+    expect(answer.isErrorText).toBe("postcode must be exactly four digits.");
+    expect(answer.result).toBeNull();
+    expect(h.kv.calls).toEqual([]);
+    expect(answer.logLine).toMatchObject({ outcome: "error", tool: "check_area_status" });
+  });
+
+  it.each([true, null])(
+    "postcode %s still answers isError \"postcode must be a string.\"",
+    async (value) => {
+      const h = makeHarness({});
+      const answer = await h.callTool("check_area_status", { postcode: value });
+      expect(answer.isErrorText).toBe("postcode must be a string.");
+      expect(answer.result).toBeNull();
+      expect(h.kv.calls).toEqual([]);
+      expect(answer.logLine).toMatchObject({ outcome: "error", tool: "check_area_status" });
+    },
+  );
+});
+
 // ---------- the 10-second memory cache ----------
 
 describe("check_area_status memory cache", () => {
