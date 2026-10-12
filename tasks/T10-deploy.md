@@ -76,3 +76,44 @@ The agent writes `scripts/smoke.sh` and nothing else. It is a bash script, run b
 - [ ] The first request after each ship and voice-context's calls to KV, mock-crm and the actors are timed and recorded next to S1's numbers.
 - [ ] `infra/ids.json` is complete.
 - [ ] MCP Inspector against the deployed `/mcp`, with a token from `POST /internal/sessions` for a fixture account, lists the five tools and calls `verify_account` with the right postcode. `telnyx-edge logs voice-tools` then shows the actor's log line carrying that session's trace id, `internal-<sid>`.
+
+## Follow-up of 12 October
+
+The first run of T10 found that mock-crm answered 401 to every keyed request (`DEBUGLOG.md`, issue 14). This follow-up fixes that, and takes in one change to two voice-tools tools that Thiago decided on 12 October. Change only these files.
+
+- `functions/mock-crm/src/index.ts`, `functions/mock-crm/src/flags.ts` and the tests in `functions/mock-crm/test/`.
+- `functions/voice-tools/src/mcp/tools/verify-account.ts`, `functions/voice-tools/src/mcp/tools/check-area-status.ts` and the tests in `functions/voice-tools/test/`.
+
+**1. mock-crm keeps its secrets per container.** A secret read is one HTTP call through the sidecar. Deployed, it takes 0.55 to 0.75 s the first time in a container, and mock-crm gives it 300 ms and keeps nothing, so every read timed out. voice-tools and voice-context already read secrets the right way (`createSecretStore` in their `src/index.ts`), so mock-crm follows them.
+
+- A successful read of `INTERNAL_KEY` or `DEMO_CALLER_PHONE` is kept for the life of the container. A failed read is not kept, so the next request reads again. A timeout, a thrown error and an empty value all count as failed.
+- The kept values live in a box the caller owns, like the flags cache, so production keeps them at module scope and every test starts with a fresh box.
+- Each read is bounded at 1,000 ms, the `SECRET_READ_TIMEOUT_MS` of voice-tools and voice-context, and a timeout still counts as missing.
+- A read that settles after its timeout fired does not change that request's answer. A late success is kept, as in voice-tools, so the next request needs no new read.
+- The order of decisions stays as it is. Unknown paths and `/healthz` read nothing, `INTERNAL_KEY` is read after routing and before the auth check, and `DEMO_CALLER_PHONE` only on `/customers` after auth and the flags. The `http` hop still times every read, so a kept value shows as about 0 ms.
+
+**2. mock-crm's flags read is bounded at 1,000 ms.** `FLAGS_TIMEOUT_MS` goes from 300 to 1,000 ms, the flags timeout of voice-tools and voice-context (ADR-019). A KV read takes about 0.8 s (DEBUGLOG issue 11), so at 300 ms the flags never apply on the deployed function. The 10-second cache stays, and so do the defaults on a timeout, cached for 10 seconds as now.
+
+**3. A JSON number for a postcode or an account number becomes its string.** The model may send `8630` where the tool expects `"8630"`, as MCP Inspector does with `--tool-arg postcode=8630`. Today that answers `isError` with "postcode must be a string."
+
+- In `verify_account` (`postcode` and `account_number`) and in `check_area_status` (`postcode`), a JSON number becomes its string as JavaScript writes it, `String(value)`. So `8630` becomes `"8630"` and `100001` becomes `"100001"`.
+- The conversion comes first. After it, the value takes exactly the path the same text takes as a string, with the 32-character cap, the spoken-form cleaning and the unclear answers in `verify_account`, and the four-digit check in `check_area_status`. So `100001` reaches the CRM and the actor as `DV-100001`, and `8630.5` answers `postcode_unclear`.
+- Any other type, such as a boolean, null, an object or an array, still answers `isError` with "<argument> must be a string."
+- `tools/list` publishes both tools' input schemas exactly as now, with these arguments as strings, so the model is still asked for a string.
+
+**Tests.** Keep every existing test unless a point above changes what it checks, and change such a test rather than delete it.
+
+- mock-crm, with the injected timeout runner and held promises.
+  - A keyed request whose `INTERNAL_KEY` read settles after 300 ms but before the 1,000 ms timer fires answers 200, and one still pending when the timer fires answers 401. Settling that read afterwards changes nothing for that request, and the next request answers 200 without a new read.
+  - Two keyed requests read `INTERNAL_KEY` once, and two lookups of the demo number on `/customers` read `DEMO_CALLER_PHONE` once and both find the demo account.
+  - After each kind of failed read (a timeout, a thrown error and an empty value), the next request reads again.
+  - `/healthz` and an unknown path read no secret, as now.
+  - The flags read is raced against 1,000 ms. A document that arrives after 300 ms but before the timer applies `crm_fail` with a 503. A read still pending when the timer fires gives the defaults, and its late settlement changes nothing.
+- voice-tools.
+  - `verify_account` with the postcode as the number `8630`, in postcode mode and in full mode, answers what the string `"8630"` answers, and the actor receives `"8630"`.
+  - `account_number` as the number `100001` reaches the CRM and the actor as `DV-100001`, and the number `10001` answers `account_number_unclear` with no call and nothing counted.
+  - `check_area_status` with the number `8630` answers what the string answers, and the number `86300` answers `isError` with a sentence that names `postcode`.
+  - `true` and `null` for each of the three arguments answer `isError` with "<argument> must be a string."
+  - `tools/list` pins the three properties exactly, `postcode` and `account_number` of `verify_account` and `postcode` of `check_area_status`, so the published schema cannot gain a number type.
+
+**Done when** `npm run check` passes with these tests. Thiago then ships mock-crm and voice-tools again, and runs the timing for mock-crm and voice-context, `scripts/smoke.sh` and the Inspector check, which close T10's acceptance.

@@ -342,6 +342,39 @@ The shared-actors doc (https://developers.telnyx.com/docs/edge-compute/stateful-
 
 **Design impact.** ADR-008 and the Failure modes table in `docs/ARCHITECTURE.md`. A mismatch between the integration secret and the edge secret does not just remove the tools, it ends the call at the first tool use. So both copies of the key are always written together from one value, as T10's steps do, and every key change gets a real test call before the demo.
 
+## 14. mock-crm answered 401 to every keyed request
+
+**Date** 12 Oct 2026 · **Area** Edge Compute, secrets
+
+**Symptom.** After T10's ships, the deployed mock-crm answered 401 to all 22 keyed requests. They came from the timing block, from `scripts/smoke.sh`, from voice-context's health checks and from Thiago's lookups of his own number. voice-tools accepted the same key from the env file for `POST /internal/sessions`, so the key was right. Each 401 took 302 to 307 ms on the server, against 2 to 6 ms for `/healthz`.
+
+**Evidence.** mock-crm's own log line shows where the time went. Its `http` hop times the secret read, and every keyed request spent the 300 ms its code allows.
+
+```text
+# telnyx-edge logs mock-crm --type runtime, trimmed, and the other 20 alike
+[2026-10-12T05:40:38.946Z] {"event":"crm_request","route":"customers","status":401,"latency_ms":{"total":302,"http":301}}
+[2026-10-12T05:54:48.684Z] {"event":"crm_request","route":"customers","status":401,"latency_ms":{"total":300,"http":300}}
+# functions/mock-crm/src/index.ts
+export const SECRET_READ_TIMEOUT_MS = 300;
+```
+
+voice-tools and voice-context read the same secrets through the same `env.SECRETS.get`, bounded at 1,000 ms and kept for the container's life after the first success. Their first reads after the ship took longer than 300 ms.
+
+```text
+# voice-context, first GET /internal/health, one read (INTERNAL_KEY); the nine calls after it show "http":0
+"latency_ms":{"total":3378,"http":732,"crm":398,"actor":965,"kv":2645}
+# voice-tools, first POST /internal/sessions, two reads (INTERNAL_KEY, then MCP_TOKEN_KEY)
+"latency_ms":{"total":1568,"http":1127,"actor":431}
+# voice-context invocations, smoke's unsigned POST /dv, whose only call is the TELNYX_PUBLIC_KEY read
+2026-10-12T05:56:19.051Z POST /dv 403 546 ms
+```
+
+**Cause.** A secret read is an HTTP call through the Dapr sidecar (issue 9), and deployed it took 0.55 to 0.75 s the first time in a container. mock-crm bounded every read at 300 ms and kept nothing, so each request read again and each read timed out. A secret that cannot be read counts as missing, and authentication failed closed with 401, as designed. `DEMO_CALLER_PHONE` has the same bound and no memo, so the demo number could not have matched either. `telnyx-edge dev` has no secrets binding (issue 9), so T10 was the first time this path ran. The flags read has the same flaw. `FLAGS_TIMEOUT_MS` is 300 ms where a KV read takes about 0.8 s (issue 11), so `crm_fail` and `crm_delay_ms` would never apply on the deployed function. No request got that far in T10.
+
+**Fix.** The T10 follow-up (T10 card, Follow-up of 12 October). mock-crm keeps each secret after its first successful read, as the other two functions do, and bounds secret reads and the flags read at 1,000 ms, their value. mock-crm gets shipped again.
+
+**Design impact.** A secret read costs 0.55 to 0.75 s once per container, and the call setup budget in `docs/ARCHITECTURE.md` has no line for it (T10 measurements below).
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
@@ -368,6 +401,52 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 **KV calls dominate.** From inside a function a KV read takes about 0.8 s and a write about 1.4 s, warm, where the latency budget in `docs/ARCHITECTURE.md` assumed 50 ms for a read. The actor round trip is about 140 ms warm and 270 to 290 ms after even a short pause, as on 9 Oct.
 
 **`dynamic_variables_webhook_timeout_ms` is 4,000 ms, approved by Thiago on 10 October.** The card's rule takes the slowest cold call setup estimate times 1.5, rounded up to 500 ms, at most 4,000 ms. On the current T08 design the slowest call setup is a CRM cache miss after a pause. Its flags read (0.9 s), CRM cache read (0.9 s) and mock-crm call (about 1.2 s, an estimate, because S1 did not measure a call between functions) run one after another, followed by the slowest of the parallel steps, the 1.8 s session write. That is about 4.8 s, which times 1.5 is 7.3 s, so the 4,000 ms cap applies, and T08's budgets have to change to fit under it. They did, in ADR-019 and the budget in `docs/ARCHITECTURE.md`.
+
+## T10 measurements
+
+12 Oct 2026, times in UTC. Thiago ran the steps from `~/code/scratch/t10/t10.sh`. Client times come from `curl`, server times from `telnyx-edge logs <name> --type invocations`, and voice-context's checks from its `/internal/health` answers (`~/code/scratch/t10/health-*.json`) and its runtime log.
+
+**Ships.** Each ship ran with `--timeout 15m` and finished on its own. voice-tools bundles the MCP SDK, and its ship took the longest.
+
+| Function | Shipped in, CLI | Wall time | Bundle | Archive |
+|---|---|---|---|---|
+| mock-crm | 5m15s | 5m18s | 771,466 bytes | 125,679 bytes |
+| voice-tools | 6m40s | 6m45s | 3,721,123 bytes | 688,612 bytes |
+| voice-context | 5m5s | 5m10s | 791,817 bytes | 130,757 bytes |
+
+**First request after the ship.** A `GET /` reached each function 2.3 to 5.4 s before our first request, and got a 404 in 20 to 44 ms on the server. It looks like the post-deploy probe of issue 4. So our first request was not the container's first, and these are not true cold starts.
+
+| Function | Probe `GET /`, server | First `/healthz`, server / client | Five warm `/healthz`, server / client |
+|---|---|---|---|
+| mock-crm | 05:40:35.584, 44 ms | 16 ms / 163 ms | 2.2 to 5.8 ms / 102 to 141 ms |
+| voice-tools | 05:48:23.358, 24 ms | 17 ms / 154 ms | 2.6 to 3.1 ms / 104 to 139 ms |
+| voice-context | 05:54:40.337, 20 ms | 14 ms / 143 ms | 1.7 to 2.6 ms / 101 to 121 ms |
+
+S1's first request after its 9 Oct deploy took 537 ms, and it included an actor call.
+
+**voice-context's dependency calls.** Ten `GET /internal/health` calls from 05:54:48 to 05:55:13, and smoke's at 05:56:24. The four checks run in parallel inside one request. The secret read happens before them, once per container.
+
+| Check | First call | The ten after it | S1, warm min / median / max |
+|---|---|---|---|
+| KV put, then get of the same key | 2,645 ms | 2,471 to 2,958 ms, and one failure at 2,501 ms | put plus get per sample, 1,827 / 2,109 / 2,404 ms |
+| `CustomerAccount.snapshot` | 483 ms | 8 to 17 ms | actor round trip 134 / 141 / 160 ms, and 269 to 284 ms after a pause |
+| `Session.get` | 482 ms | 8 to 14 ms | as above |
+| Secret read, `INTERNAL_KEY` | 732 ms | 0 ms, kept from the first | not measured |
+| CRM lookup | 398 ms | 308 to 323 ms | not measured, and this row only shows mock-crm's 401 after its 300 ms timeout (issue 14) |
+
+The other functions' first calls agree. voice-tools' first `POST /internal/sessions` spent 1,127 ms on its two secret reads and 431 ms on `Session.create`, and `SESSION.get` then took 7 ms on `initialize` and `tools/list`. voice-context's first read of `TELNYX_PUBLIC_KEY`, for smoke's unsigned `POST /dv`, took about 546 ms.
+
+**The checks that failed.** `ok` was false on all eleven calls. `crm` failed every time, because mock-crm answered 401 (issue 14). `kv` failed once, on the fourth call at 05:54:56, after 2,501 ms. That matches a timeout. Either the put hit its 2,500 ms bound, or the get hit its 1,500 ms bound after a put of about 1.0 s, and the summed `kv` hop cannot tell which. `customer_account` and `session` passed every time.
+
+**Not measured yet.** mock-crm's own keyed latency and voice-context's call to it, because every keyed request ended in the 300 ms timeout and a 401. They come from the timing run after the follow-up's re-ship, and so do the CRM timeouts. The MCP Inspector check did not run, because `t10_inspector` runs only after a passing smoke.
+
+**Budget.** Three findings move the call setup budget in `docs/ARCHITECTURE.md`.
+
+- A secret read costs 0.55 to 0.75 s once per container, and the budget has no line for it. `/dv` reads `TELNYX_PUBLIC_KEY` for the signature check before its soft budget starts. On a new container's first call, that read uses most of the second the budget leaves for the signature check, the token, cold-start work and the network. The two token keys are read in parallel with the flags, the CRM lookup and the area statuses, inside the soft budget.
+- KV is slower than in S1. Put plus get took 2.47 to 2.96 s, where S1 took 1.83 to 2.40 s, and one call hit a KV timeout. The CRM cache write (2,500 ms, cut by the soft budget) and the flags and area reads (1,000 and 1,500 ms on a cache miss) have less headroom than the table assumes. The split between put and get is not measured.
+- Warm actor calls took 8 to 17 ms, far below S1's 141 ms and the table's 0.15 s. The first actor calls after the ship took 431 to 483 ms, above the 269 to 284 ms S1 saw after a pause.
+
+The table gets these numbers together with the CRM timeouts, from the timing run after the re-ship.
 
 ## S2 findings
 

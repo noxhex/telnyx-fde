@@ -69,7 +69,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T08 | voice-context function | T03, T04, T05, T06, T18, S1 | done |
 | T09 | voice-tools MCP server core | T04, T08, T18, S3, S4 | done |
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
-| T10 | Deploy and smoke-test all three functions | T08, T09, T19 | in progress, `scripts/smoke.sh` done |
+| T10 | Deploy and smoke-test all three functions | T08, T09, T19 | in progress, shipped 12 Oct, follow-up for mock-crm's 401s (DEBUGLOG issue 14) |
 | T11 | Assistant provisioning script | S2, S4, T10 | outline |
 | T12 | Workflow content | T11 | outline |
 | T13 | End-to-end path tests | T12 | outline |
