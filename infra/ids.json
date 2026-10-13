@@ -16,5 +16,31 @@
       "funcId": "26584f2f-d158-40b5-98ce-72f84c4e6690",
       "invokeUrl": "https://mock-crm-26584f2f-d.telnyxcompute.com"
     }
+  },
+  "assistant": {
+    "id": "assistant-6ed2edf2-57b7-4886-bb83-d55f6ef92b6b",
+    "name": "Duinvezel Support",
+    "texmlAppId": "3069470973712402343"
+  },
+  "mcpServer": {
+    "id": "1e5e7737-6436-4697-b4a0-5592e9f0e7b0",
+    "name": "duinvezel-voice-tools"
+  },
+  "tools": {
+    "logDisclosure": {
+      "id": "tool-c62485e7-723f-4410-98a1-598e943335b3",
+      "name": "duinvezel-log-disclosure"
+    },
+    "transfer": {
+      "id": "tool-ca4b396d-701b-487a-9ab2-1235684523d5",
+      "name": "duinvezel-transfer"
+    },
+    "hangup": {
+      "id": "tool-5e7512ac-4642-4e28-b332-0411bfbdf308",
+      "name": "duinvezel-hangup"
+    }
+  },
+  "phoneNumber": {
+    "id": "3067613230470792977"
   }
 }
