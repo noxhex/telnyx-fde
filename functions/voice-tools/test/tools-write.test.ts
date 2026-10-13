@@ -78,7 +78,7 @@ function makeSession(overrides: Partial<SessionDoc> = {}): SessionDoc {
     accountNumber: "DV-100002",
     postcode: "8630",
     lineId: "LN-000002",
-    callerPhone: "+32491244713",
+    callerPhone: "+3258000110",
     createdAt: T0,
     expiresAt: T0 + 7_200_000,
     disclosedAt: null,
@@ -1611,7 +1611,7 @@ describe("create_ticket anonymous callback", () => {
     expect(puts[0]?.options).toMatchObject({ expirationTtl: 604_800 });
     const stored = (await (h.kv as KvFake).get(`callback/${SID}`)) as string;
     expect(JSON.parse(stored)).toEqual({
-      phone: "+32491244713",
+      phone: "+3258000110",
       summary: "Please call me back about moving my connection.",
       ticketId: "T-6142",
       window: T0_WINDOW,

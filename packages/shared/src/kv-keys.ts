@@ -30,7 +30,7 @@ function requireSessionId(sid: string): void {
 }
 
 export const kvKeys = {
-  /** `crm/phone/32491244713` — digits only, the `+` and any punctuation go. */
+  /** `crm/phone/3258000110` — digits only, the `+` and any punctuation go. */
   crmPhone(e164: string): string {
     return `crm/phone/${e164.replace(/\D/g, "")}`;
   },

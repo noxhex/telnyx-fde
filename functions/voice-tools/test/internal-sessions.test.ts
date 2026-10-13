@@ -367,7 +367,7 @@ describe("POST /internal/sessions validation", () => {
 describe("POST /internal/sessions happy path", () => {
   it("a valid body creates the session on the pinned random sid with traceId internal-<sid>", async () => {
     const h = makeHarness();
-    const res = await h.post({ body: JSON.stringify({ identity: "attested", accountNumber: "DV-100002", postcode: "8630", lineId: "LN-000002", callerPhone: "+32491244713" }) });
+    const res = await h.post({ body: JSON.stringify({ identity: "attested", accountNumber: "DV-100002", postcode: "8630", lineId: "LN-000002", callerPhone: "+3258000110" }) });
     expect(res.status).toBe(200);
     expect(PINNED_SID).toMatch(/^[0-9a-f]{32}$/);
     expect(res.body).toMatchObject({ sid: PINNED_SID });
@@ -380,7 +380,7 @@ describe("POST /internal/sessions happy path", () => {
         accountNumber: "DV-100002",
         postcode: "8630",
         lineId: "LN-000002",
-        callerPhone: "+32491244713",
+        callerPhone: "+3258000110",
         nowMs: T0,
       },
     });

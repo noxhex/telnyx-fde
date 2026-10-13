@@ -8,7 +8,7 @@
 const ELLIPSIS = "…";
 
 /**
- * `+32491244713` -> `+32…4713`. Keeps the country prefix (`+` and the first
+ * `+3258000110` -> `+32…0110`. Keeps the country prefix (`+` and the first
  * two digits) and the last four digits. Input with fewer than six digits
  * collapses to a bare ellipsis — the kept parts would overlap and leak the
  * full number.

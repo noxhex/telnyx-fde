@@ -36,7 +36,7 @@ export function createLogger(
 ): Logger;
 
 // mask.ts
-export function maskPhone(e164: string): string;    // "+32491244713" -> "+32…4713"
+export function maskPhone(e164: string): string;    // "+3258000110" -> "+32…0110"
 export function maskAccount(id: string): string;    // "DV-100231" -> "DV-…231"
 
 // timing.ts
@@ -49,7 +49,7 @@ export function startTimings(now?: () => number): Timings;
 
 // kv-keys.ts
 export const kvKeys: {
-  crmPhone(e164: string): string;          // "crm/phone/32491244713"
+  crmPhone(e164: string): string;          // "crm/phone/3258000110"
   session(sid: string): string;            // "session/<sid>"
   areaStatus(postcode: string): string;    // "area/8630/status"
   callback(sid: string): string;           // "callback/<sid>"

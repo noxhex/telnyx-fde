@@ -46,8 +46,8 @@ import type { TestKeyPair } from "./helpers/signed-request.js";
 // ---------- shared constants (keys generated per run, never committed) ----------
 
 const T0 = 1_600_000_000_000;
-const CALLER = "+32491244713";
-const CALLER_DIGITS = "32491244713";
+const CALLER = "+3258000110";
+const CALLER_DIGITS = "3258000110";
 const CALL_CONTROL_ID = "v3:6A0bCdEf1:2026-10-10T09:00:00Z";
 const SID = sessionIdFromCallControlId(CALL_CONTROL_ID);
 const TOKEN_KEY_RAW = randomBytes(32).toString("base64url");
@@ -579,7 +579,7 @@ describe("handleDv happy paths", () => {
       event: "dv",
       node: "init",
       trace_id: CALL_CONTROL_ID,
-      caller: "+32…4713",
+      caller: "+32…0110",
       account: "DV-…002",
       identity: "attested",
       area: "8630",
@@ -755,7 +755,7 @@ describe("handleDv happy paths", () => {
     const h = makeHarness();
     // Seven digits, the way 13 October's browser test call arrived.
     const { status, body } = await h.call(
-      makeDvBody({ telnyx_end_user_target: "+3249124" }),
+      makeDvBody({ telnyx_end_user_target: "+3258000" }),
     );
     expect(status).toBe(200);
     expect(body.dynamic_variables).toMatchObject({
@@ -773,7 +773,7 @@ describe("handleDv happy paths", () => {
       input: {
         traceId: CALL_CONTROL_ID,
         identity: "anonymous",
-        callerPhone: "+3249124",
+        callerPhone: "+3258000",
         nowMs: T0,
       },
     });
@@ -786,11 +786,11 @@ describe("handleDv happy paths", () => {
 
     // The boundary: exactly eight digits do get a lookup.
     const second = makeHarness();
-    await second.call(makeDvBody({ telnyx_end_user_target: "+32491244" }));
-    expect(second.crm.calls).toEqual(["32491244"]);
+    await second.call(makeDvBody({ telnyx_end_user_target: "+32580001" }));
+    expect(second.crm.calls).toEqual(["32580001"]);
     expect(
       second.kv.calls.some(
-        (c) => c.method === "get" && c.key === kvKeys.crmPhone("32491244"),
+        (c) => c.method === "get" && c.key === kvKeys.crmPhone("32580001"),
       ),
     ).toBe(true);
   });

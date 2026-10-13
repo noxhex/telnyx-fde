@@ -595,7 +595,7 @@ describe("the production /dv path survives a cold INTERNAL_KEY read (T22)", () =
 
       expect(fetchCalls).toHaveLength(1);
       expect(fetchCalls[0]?.url).toBe(
-        "http://mock-crm.test/customers?phone=32491244713",
+        "http://mock-crm.test/customers?phone=3258000110",
       );
       expect(fetchCalls[0]?.init?.headers).toEqual({ "x-internal-key": INTERNAL_KEY });
 

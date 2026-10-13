@@ -110,8 +110,8 @@ describe("the environment", () => {
   it.each([
     ["+123456", "seven digits is nine, six is too few"],
     ["+1234567890123456", "sixteen digits is one too many"],
-    ["32479123456", "no plus"],
-    ["+32 479 12 34 56", "spaces"],
+    ["3258000132", "no plus"],
+    ["+32 58 00 01 32", "spaces"],
     ["+32SECRET12345", "letters"],
   ])("rejects a number that is not E.164: %s (%s), naming the variable and never its value", (bad) => {
     expect(() => readEnvConfig({ ...good, TRANSFER_TO: bad })).toThrowError(
@@ -189,7 +189,7 @@ describe("the phone number lookup", () => {
   it("stops with no PATCH and no ids file when the API answers only other numbers", async () => {
     const api = new FakeApi({
       phoneNumbers: [
-        { id: "pn-other-1", phone_number: "+32470009988", connection_id: "app-x" },
+        { id: "pn-other-1", phone_number: "+3258000131", connection_id: "app-x" },
         { id: "pn-other-2", phone_number: "+12025550100", connection_id: "app-y" },
       ],
       ignorePhoneNumberFilter: true,
@@ -211,7 +211,7 @@ describe("the phone number lookup", () => {
 
   it("stops the same way on a dry run, with only GET requests", async () => {
     const api = new FakeApi({
-      phoneNumbers: [{ id: "pn-other-1", phone_number: "+32470009988", connection_id: "app-x" }],
+      phoneNumbers: [{ id: "pn-other-1", phone_number: "+3258000131", connection_id: "app-x" }],
       ignorePhoneNumberFilter: true,
     });
     const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { dryRun: true } });

@@ -17,7 +17,7 @@ import { loadInstructions } from "../../assistant/instructions.ts";
 /** Fake values only — never a real key or number. */
 export const API_KEY = "fake-api-key-0001";
 export const PHONE_NUMBER = "+12025550143";
-export const TRANSFER_TO = "+32470001122";
+export const TRANSFER_TO = "+3258000130";
 
 export const BASE_IDS_FILE: Record<string, unknown> = {
   kvNamespaceId: "504d09fa-a57f-4d70-b134-6b97ea537ae1",

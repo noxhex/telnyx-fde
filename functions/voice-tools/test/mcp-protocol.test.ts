@@ -45,7 +45,7 @@ function liveSession(now: number): SessionDoc {
     accountNumber: "DV-100002",
     postcode: "8630",
     lineId: "LN-000002",
-    callerPhone: "+32491244713",
+    callerPhone: "+3258000110",
     createdAt: now,
     expiresAt: now + 7_200_000,
     disclosedAt: null,

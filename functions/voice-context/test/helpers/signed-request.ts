@@ -90,8 +90,8 @@ export function makeDvBody(overrides: Record<string, unknown> = {}): Record<stri
     data: {
       event_type: "assistant.initialization",
       payload: {
-        telnyx_end_user_target: "+32491244713",
-        telnyx_agent_target: "+3223450850",
+        telnyx_end_user_target: "+3258000110",
+        telnyx_agent_target: "+3258000120",
         call_control_id: "v3:6A0bCdEf1:2026-10-10T09:00:00Z",
         telnyx_conversation_channel: "phone_call",
         ...overrides,

@@ -131,7 +131,7 @@ describe("diffTool", () => {
     display_name: "duinvezel-transfer",
     type: "transfer",
     timeout_ms: 5000,
-    transfer: { targets: [{ name: "Duinvezel support engineer", to: "+32470001122" }], from: "+12025550143" },
+    transfer: { targets: [{ name: "Duinvezel support engineer", to: "+3258000130" }], from: "+12025550143" },
   };
   const asRead = {
     id: "tool-1",
@@ -156,7 +156,7 @@ describe("diffTool", () => {
 describe("diffTool on the disclosure tool", () => {
   const disclosure = sharedToolBodies({
     voiceContextUrl: "https://voice-context.example.com",
-    transferTo: "+32470001122",
+    transferTo: "+3258000130",
     phoneNumber: "+12025550143",
   }).find((tool) => tool.key === "logDisclosure");
   if (disclosure === undefined) {

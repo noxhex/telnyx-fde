@@ -9,12 +9,12 @@ const SID = "0123456789abcdef0123456789abcdef";
 describe("kvKeys", () => {
   describe("crmPhone", () => {
     it("drops the + and keeps digits only", () => {
-      expect(kvKeys.crmPhone("+32491244713")).toBe("crm/phone/32491244713");
+      expect(kvKeys.crmPhone("+3258000110")).toBe("crm/phone/3258000110");
     });
 
     it("strips non-digit characters such as spaces and dashes", () => {
-      expect(kvKeys.crmPhone("+32 491 244 713")).toBe("crm/phone/32491244713");
-      expect(kvKeys.crmPhone("+32-491-244-713")).toBe("crm/phone/32491244713");
+      expect(kvKeys.crmPhone("+32 580 001 10")).toBe("crm/phone/3258000110");
+      expect(kvKeys.crmPhone("+32-580-001-10")).toBe("crm/phone/3258000110");
     });
   });
 
@@ -98,7 +98,7 @@ describe("sessionIdFromCallControlId", () => {
 
 describe("assertValidKey", () => {
   it("accepts keys built from the allowed character set", () => {
-    expect(() => assertValidKey("crm/phone/32491244713")).not.toThrow();
+    expect(() => assertValidKey("crm/phone/3258000110")).not.toThrow();
     expect(() => assertValidKey("a-zA-Z0-9-_/=.for")).not.toThrow();
     expect(() => assertValidKey("area/8630/status")).not.toThrow();
     expect(() => assertValidKey("x")).not.toThrow();
@@ -118,7 +118,7 @@ describe("assertValidKey", () => {
   });
 
   it("rejects a key containing a plus sign", () => {
-    expect(() => assertValidKey("crm/phone/+32491244713")).toThrow();
+    expect(() => assertValidKey("crm/phone/+3258000110")).toThrow();
   });
 
   it("rejects keys with other characters outside the allowed set", () => {

@@ -4,7 +4,7 @@ import { maskAccount, maskPhone } from "../src/index.js";
 
 describe("maskPhone", () => {
   it("keeps the +, the first two digits and the last four digits", () => {
-    expect(maskPhone("+32491244713")).toBe("+32…4713");
+    expect(maskPhone("+3258000110")).toBe("+32…0110");
   });
 
   it("masks a number of different lengths the same way", () => {

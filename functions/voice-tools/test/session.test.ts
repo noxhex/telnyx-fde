@@ -23,7 +23,7 @@ const FULL_INPUT = {
   accountNumber: "DV-100001",
   postcode: "8630",
   lineId: "line-1",
-  callerPhone: "+32491244713",
+  callerPhone: "+3258000110",
 };
 
 /** A live session created at T0 with the default TTL, overridable per field. */
@@ -36,7 +36,7 @@ function liveSession(over: Partial<SessionDoc> = {}): SessionDoc {
     accountNumber: "DV-100001",
     postcode: "8630",
     lineId: "line-1",
-    callerPhone: "+32491244713",
+    callerPhone: "+3258000110",
     createdAt: T0,
     expiresAt: T0 + DEFAULT_TTL_MS,
     disclosedAt: null,
@@ -70,7 +70,7 @@ describe("create", () => {
       accountNumber: "DV-100001",
       postcode: "8630",
       lineId: "line-1",
-      callerPhone: "+32491244713",
+      callerPhone: "+3258000110",
       createdAt: T0,
       expiresAt: T0 + DEFAULT_TTL_MS,
       disclosedAt: null,
@@ -113,7 +113,7 @@ describe("create", () => {
       accountNumber: "DV-999999",
       postcode: "9999",
       lineId: "line-OTHER",
-      callerPhone: "+32499999999",
+      callerPhone: "+3258000111",
       sid: SID,
       nowMs: T0 + 1000,
       ttlMs: 5_000,
@@ -233,7 +233,7 @@ describe("setVerified", () => {
     expect(doc.lineId).toBe("line-2");
     // The rest of the session is untouched.
     expect(doc.traceId).toBe("trace-abc");
-    expect(doc.callerPhone).toBe("+32491244713");
+    expect(doc.callerPhone).toBe("+3258000110");
     expect(doc.expiresAt).toBe(s.expiresAt);
   });
 
@@ -733,7 +733,7 @@ describe("Session logging", () => {
     });
     expectLatencyShape(line);
     // No field carries the caller's phone number.
-    expect(JSON.stringify(line)).not.toContain("32491244713");
+    expect(JSON.stringify(line)).not.toContain("3258000110");
     expect(JSON.stringify(line)).not.toContain(FULL_INPUT.callerPhone);
   });
 
