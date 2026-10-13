@@ -2,6 +2,8 @@
 
 **Phase** 2 · **Depends on** T22 · **Code by** implementer agent
 
+**Not run.** On 13 October Thiago chose the warm-up his runbook already has, `t10_smoke` then `t10_inspector`, and the README describes it. The canary design went into the README too. This card stays as the record of the script design.
+
 ## Goal
 
 Before the review, Thiago runs one script. It makes every replica of the three functions read its secrets and flags, so the reviewers' calls meet warm replicas.

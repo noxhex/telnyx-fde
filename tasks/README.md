@@ -76,8 +76,8 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T22 | Calls that survive a replica's first use | T20 | done, voice-context and voice-tools to ship |
 | T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, Thiago runs the provisioning script three times |
 | T15 | Demo tooling: flags, simulated outage reports and a reset | T22 | ready |
-| T14 | A warm-up before the review | T22 | ready |
+| T14 | A warm-up before the review | T22 | not run, the warm-up is `t10_smoke` then `t10_inspector` (README) |
 | T21 | Fictional phone numbers in the tests | T11, last in the batch | ready |
-| T13 | Path tests and the rehearsal | T14, T15, T22, T23 | ready, no agent code |
+| T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
-| T17 | README and submission | T13, T14 | outline |
+| T17 | README and submission | T13 | outline |

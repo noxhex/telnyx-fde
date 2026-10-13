@@ -4,7 +4,7 @@ These get written in full once the spikes have answered their questions, because
 
 ## T13 to T15
 
-Written in full on 13 October, after the first calls. [T13](T13-path-tests.md) covers the path tests and the rehearsal, [T14](T14-warm-up.md) shrank to a warm-up script, and [T15](T15-demo-tooling.md) covers the flags, the simulated outage reports and a reset of the demo state. The canary actor from T14's outline goes into the README as the next step. It runs every 30 seconds, checks voice-context's health, a canary session and MCP `initialize` and `tools/list`, and alerts through ntfy after two consecutive failures, since the health check's KV probe times out about one call in ten.
+Written in full on 13 October, after the first calls. [T13](T13-path-tests.md) covers the path tests and the rehearsal, [T14](T14-warm-up.md) shrank to a warm-up script and was then not run, because Thiago's runbook already has one, and [T15](T15-demo-tooling.md) covers the flags, the simulated outage reports and a reset of the demo state. The canary actor from T14's outline goes into the README as the next step. It runs every 30 seconds, checks voice-context's health, a canary session and MCP `initialize` and `tools/list`, and alerts through ntfy after two consecutive failures, since the health check's KV probe times out about one call in ten.
 
 ## T16. Stretch goals
 

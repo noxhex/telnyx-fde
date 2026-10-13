@@ -1,6 +1,6 @@
 # T13. Path tests and the rehearsal
 
-**Phase** 2 · **Depends on** T15, T14, T22 and T23 · **Code by** nobody. Thiago calls, and Claude Code reads the logs and records the evidence.
+**Phase** 2 · **Depends on** T15, T22 and T23 · **Code by** nobody. Thiago calls, and Claude Code reads the logs and records the evidence.
 
 ## Goal
 
@@ -13,9 +13,9 @@ This replaces the T13 outline in `tasks/later.md`.
 
 ## Before each round of calls
 
-1. `node scripts/demo.ts reset`, so no account is a repeat caller or locked and no area is in outage.
-2. `node scripts/warm-up.ts`, until it ends with a warm round.
-3. For the outage path, `node scripts/demo.ts reports 8670 2`, one report short of the default threshold of 3.
+1. `scripts/demo.sh reset`, so no account is a repeat caller or locked and no area is in outage.
+2. The warm-up, `t10_smoke` then `t10_inspector` from Thiago's runbook. The README says what they send.
+3. For the outage path, `scripts/demo.sh reports 8670 2`, one report short of the default threshold of 3.
 
 ## The calls
 
