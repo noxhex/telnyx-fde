@@ -7,9 +7,11 @@
  * routes/dv.ts keeps waiting for the KV side).
  *
  * The internal key is read per call through `readInternalKey`: on the
- * deployed function that read is memoised per container, in dev it answers
- * null, and a null key means the call is never made (mock-crm would 401,
- * which is just another failure).
+ * deployed function that read joins the container's shared read (T22 — it
+ * is not cut at SECRET_READ_TIMEOUT_MS anymore; the route's own lookup
+ * bound covers key read plus fetch), in dev it answers null, and a null
+ * key means the call is never made (mock-crm would 401, which is just
+ * another failure).
  */
 
 import { crmCustomerSchema } from "../config.js";

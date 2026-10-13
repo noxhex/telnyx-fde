@@ -27,8 +27,16 @@ export const SECRET_READ_TIMEOUT_MS = 1_000;
 
 export const TIMEOUTS = {
   flagsMs: 1_000,
-  crmLookupMs: 1_500,
-  areaStatusMs: 1_500,
+  /**
+   * The whole CRM lookup race, KV side and mock-crm side. T22: covers two
+   * first uses in a row — this replica's `INTERNAL_KEY` read inside the
+   * mock-crm call (0.55 to over 1.0 s cold, no longer cut at
+   * `SECRET_READ_TIMEOUT_MS`) and mock-crm's own 1,000 ms read window on a
+   * cold replica (T20), about 1.7 s together (DEBUGLOG issue 17).
+   */
+  crmLookupMs: 2_000,
+  /** One area status KV read (T22: KV reads took 1,083 to 1,639 ms on 13 October — DEBUGLOG issue 17). */
+  areaStatusMs: 2_000,
   recordCallMs: 600,
   sessionCreateMs: 1_000,
   sessionDisclosureMs: 1_000,

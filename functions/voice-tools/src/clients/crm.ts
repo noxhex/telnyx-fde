@@ -11,9 +11,11 @@
  * guess is counted on the session) and `failed` (everything else — a tool
  * error, not a business outcome).
  *
- * The internal key is read per call through `readInternalKey`: memoised per
- * container in production (index.ts), null in dev, and a null key means the
- * call is never made (mock-crm would 401, which is just another failure).
+ * The internal key is read per call through `readInternalKey`: it joins the
+ * container's shared read in production (index.ts; T22 — not cut at
+ * SECRET_READ_TIMEOUT_MS anymore, the tool's own bound covers key read plus
+ * fetch), null in dev, and a null key means the call is never made
+ * (mock-crm would 401, which is just another failure).
  */
 
 import { z } from "zod";

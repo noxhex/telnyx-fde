@@ -22,6 +22,7 @@ import type { RecordVerifyFailureInput, SetVerifiedInput } from "../src/actors/s
 import type { AccountsClient } from "../src/clients/accounts.js";
 import type { AreasClient } from "../src/clients/areas.js";
 import type { AreaReportInput } from "../src/actors/area-incident.js";
+import { createCrmClient } from "../src/clients/crm.js";
 import type { CrmAccount, CrmClient, GetAccountOutcome } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import type { CreateTicketResult, VerifyInput, VerifyResult } from "../src/domain/customer-account.js";
@@ -707,12 +708,12 @@ describe("verify_account", () => {
 });
 
 describe("verify_account timeouts", () => {
-  it("a held CRM call times out at exactly 1,500 ms; the late answer is absorbed", async () => {
+  it("a held CRM call times out at exactly 2,500 ms (T22); the late answer is absorbed", async () => {
     const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
     h.crm.heldAccount = hold<GetAccountOutcome>();
     const pending = h.callTool("verify_account", { postcode: "8630" });
     await tick();
-    const timer = h.timers.pending().find((e) => e.ms === 1_500);
+    const timer = h.timers.pending().find((e) => e.ms === 2_500);
     expect(timer).toBeDefined();
     timer?.fire();
     const answer = await pending;
@@ -777,6 +778,124 @@ describe("verify_account timeouts", () => {
     expect(answer.isErrorText).toBe("The verification system is not responding right now.");
     h.sessions.heldFailure.resolve({ outcome: "counted", attemptsLeft: 2, lockedUntil: null });
     await tick();
+  });
+});
+
+describe("verify_account: the key read counts against the account fetch's own bound (T22)", () => {
+  /** mock-crm's DV-100002 fixture shape, matching the harness session's account. */
+  const MARIE: CrmAccount = {
+    accountNumber: "DV-100002",
+    firstName: "Marie",
+    postcode: "8630",
+    lineId: "LN-000002",
+  };
+  const INTERNAL_KEY = "test-internal-key-t22";
+
+  /**
+   * Wires the real CRM client into the harness: its `readInternalKey` and
+   * its fetch are held by the test, so the key read and mock-crm's answer
+   * land when the test says, measured on the fake clock.
+   */
+  function wireRealCrm(h: Harness): {
+    heldKey: HeldPromise<string | null>;
+    heldFetch: HeldPromise<Response>;
+    fetchCalls: { url: string; init?: RequestInit }[];
+  } {
+    const heldKey = hold<string | null>();
+    const heldFetch = hold<Response>();
+    const fetchCalls: { url: string; init?: RequestInit }[] = [];
+    h.deps.crm = createCrmClient({
+      crmUrl: "http://mock-crm.test",
+      readInternalKey: () => heldKey.promise,
+      fetchImpl: ((url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init });
+        return heldFetch.promise;
+      }) as unknown as typeof fetch,
+    });
+    return { heldKey, heldFetch, fetchCalls };
+  }
+
+  it("verifies when the key lands at 650 ms and mock-crm 1,050 ms later, inside the 2,500 ms bound", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    const { heldKey, heldFetch, fetchCalls } = wireRealCrm(h);
+    const pending = h.callTool("verify_account", { postcode: "8630" });
+    await tick();
+
+    // The whole account fetch gets the card's 2,500 ms — a cold key read
+    // (this replica's first use) and a cold mock-crm (its replica's first
+    // keyed request) fit inside it one after another. Before T22 the key
+    // read was cut at 1,000 ms and Thiago's 12:40 verify died here
+    // (DEBUGLOG issue 17).
+    const crmTimer = h.timers.pending().find((e) => e.ms === 2_500);
+    expect(crmTimer).toBeDefined();
+    // No fetch until the key is there (mock-crm would 401 without it).
+    expect(fetchCalls).toEqual([]);
+
+    h.clock.advance(650);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]?.url).toBe("http://mock-crm.test/accounts/DV-100002");
+    expect(fetchCalls[0]?.init?.headers).toEqual({ "x-internal-key": INTERNAL_KEY });
+
+    h.clock.advance(1_050);
+    heldFetch.resolve(Response.json(MARIE));
+    const answer = await pending;
+
+    expect(answer.result).toEqual({
+      verified: true,
+      first_name: "Marie",
+      area_name: "Veurne",
+      area_outage: false,
+      outage_eta: null,
+    });
+    expect(crmTimer?.fired).toBe(false);
+    const latency = answer.logLine.latency_ms as Record<string, unknown>;
+    expect(latency.crm).toBe(1_700);
+  });
+
+  it("still verifies at exactly 2,500 ms combined (key 650 + mock-crm 1,850)", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    const { heldKey, heldFetch } = wireRealCrm(h);
+    const pending = h.callTool("verify_account", { postcode: "8630" });
+    await tick();
+
+    h.clock.advance(650);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    h.clock.advance(1_850);
+    heldFetch.resolve(Response.json(MARIE));
+    const answer = await pending;
+
+    expect(answer.result).toMatchObject({ verified: true, first_name: "Marie" });
+    expect(h.timers.entries.find((e) => e.ms === 2_500)?.fired).toBe(false);
+  });
+
+  it("at 2,501 ms combined the fetch times out: one sayable sentence, and the late answer is absorbed", async () => {
+    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+    const { heldKey, heldFetch } = wireRealCrm(h);
+    const pending = h.callTool("verify_account", { postcode: "8630" });
+    await tick();
+
+    h.clock.advance(650);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    h.clock.advance(1_851);
+    const crmTimer = h.timers.pending().find((e) => e.ms === 2_500);
+    expect(crmTimer).toBeDefined();
+    crmTimer?.fire();
+    const answer = await pending;
+
+    expect(answer.isErrorText).toBe("The verification system is not responding right now.");
+    expect(answer.result).toBeNull();
+    expect(h.accounts.verifies).toEqual([]);
+    expect(h.sessions.verified).toEqual([]);
+
+    // mock-crm's answer lands after the timeout: absorbed quietly — the
+    // account is never marked verified and no second outcome is logged.
+    heldFetch.resolve(Response.json(MARIE));
+    await tick();
+    expect(h.sessions.verified).toEqual([]);
   });
 });
 

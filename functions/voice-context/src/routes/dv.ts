@@ -10,7 +10,9 @@
  *   4. both token keys, the flags, the CRM lookup and the five area
  *      statuses start together — the flags from the container's refreshing
  *      value (T20), so only a container's first requests can wait for KV,
- *      the rest each inside its own timeout behind the memory caches;
+ *      the rest each inside its own timeout behind the memory caches. A
+ *      caller with fewer than eight digits is anonymous without any lookup,
+ *      like a caller with no phone at all (T22, DEBUGLOG issue 17);
  *   5. flags first — `dv_force_error` answers 500 before any state change;
  *   6/7. once the CRM lookup has answered: recordCall, SESSION.create and
  *      the KV cache write (mock-crm answers only) run in parallel;
@@ -147,7 +149,9 @@ async function readAreas(
  * (200 customer, 404). A KV miss or a failed call is not an answer, so the
  * other side is still awaited; both settled without an answer is
  * `crm_error`, and the deadline winning is `crm_timeout`. Late settlements
- * are handled no-ops, never unhandled rejections.
+ * are handled no-ops, never unhandled rejections. The mock-crm side carries
+ * the `INTERNAL_KEY` read inside the same bound (T22: 2,000 ms covers a
+ * cold key read and a cold mock-crm one after another, DEBUGLOG issue 17).
  */
 async function lookupCaller(
   deps: VoiceContextDeps,
@@ -218,6 +222,8 @@ async function lookupCaller(
 
 interface DvLogFields {
   traceId: string | null;
+  /** `telnyx_conversation_channel` as received (T22), cut to 32 characters; null before the body parses. */
+  channel: string | null;
   callerPhone: string | null;
   accountNumber: string | null;
   identity: string;
@@ -236,6 +242,7 @@ function logDv(deps: VoiceContextDeps, timings: Timings, fields: DvLogFields): v
   deps.log.log(fields.status >= 500 ? "error" : "info", "dv", {
     trace_id: fields.traceId,
     node: "init",
+    channel: fields.channel,
     caller: fields.callerPhone !== null ? maskPhone(fields.callerPhone) : null,
     account: fields.accountNumber !== null ? maskAccount(fields.accountNumber) : null,
     identity: fields.identity,
@@ -266,7 +273,7 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
     parsedBody = dvBodySchema.parse(JSON.parse(rawBody));
   } catch {
     logDv(deps, timings, {
-      traceId: null, callerPhone: null, accountNumber: null, identity: "anonymous",
+      traceId: null, channel: null, callerPhone: null, accountNumber: null, identity: "anonymous",
       area: null, areaOutage: false, repeatCaller: false, cache: "miss",
       cacheWrite: null, outcome: "error", reasons: ["bad_request"], status: 400,
     });
@@ -277,9 +284,15 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   // Step 3: ids. trace_id is the call control id; sid derives from it.
   const traceId = payload.call_control_id;
   const sid = sessionIdFromCallControlId(traceId);
+  const channel = payload.telnyx_conversation_channel.slice(0, 32);
   const isPhoneCall = payload.telnyx_conversation_channel === "phone_call";
   const callerPhone = isPhoneCall ? payload.telnyx_end_user_target : null;
   const digits = callerPhone === null ? null : callerPhone.replace(/\D/g, "");
+  // A caller with too few digits to be a subscriber number is anonymous
+  // without any lookup (T22): no mock-crm call and no `crm/phone/` key,
+  // exactly the path a caller with no phone takes. A browser test call with
+  // a stub caller once cached a 404 as "not found" (DEBUGLOG issue 17).
+  const lookupDigits = digits !== null && digits.length >= 8 ? digits : null;
 
   // Step 4: both token keys, the flags, the CRM lookup and the five area
   // statuses start together — cold containers pay the sidecar reads here,
@@ -289,9 +302,9 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   const tokenKeyPromise = readSecretKeyTimed(deps, timings, SECRET_HANDLES.mcpTokenKey);
   const encKeyPromise = readSecretKeyTimed(deps, timings, SECRET_HANDLES.mcpEncKey);
   const lookupPromise: Promise<LookupOutcome> =
-    digits === null
+    lookupDigits === null
       ? Promise.resolve({ answer: null, reason: "no_phone" })
-      : lookupCaller(deps, timings, digits, budget);
+      : lookupCaller(deps, timings, lookupDigits, budget);
   const areasPromise = readAreas(deps, timings, budget);
 
   // Step 5: flags and token keys first, before anything changes state. A
@@ -299,7 +312,7 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   const flags = await flagsPromise;
   if (flags.dvForceError) {
     logDv(deps, timings, {
-      traceId, callerPhone, accountNumber: null, identity: "anonymous",
+      traceId, channel, callerPhone, accountNumber: null, identity: "anonymous",
       area: null, areaOutage: false, repeatCaller: false, cache: "miss",
       cacheWrite: null, outcome: "error", reasons: ["dv_force_error"], status: 500,
     });
@@ -308,7 +321,7 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   const [tokenKey, encKey] = await Promise.all([tokenKeyPromise, encKeyPromise]);
   if (tokenKey === null || encKey === null) {
     logDv(deps, timings, {
-      traceId, callerPhone, accountNumber: null, identity: "anonymous",
+      traceId, channel, callerPhone, accountNumber: null, identity: "anonymous",
       area: null, areaOutage: false, repeatCaller: false, cache: "miss",
       cacheWrite: null, outcome: "error", reasons: ["secret_error"], status: 500,
     });
@@ -391,14 +404,14 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
     }
   })();
   const cacheWritePromise =
-    digits === null || lookup.answer === null || lookup.source !== "crm"
+    lookupDigits === null || lookup.answer === null || lookup.source !== "crm"
       ? Promise.resolve()
       : (async (): Promise<void> => {
           try {
             const raced = await timings.time("kv", () =>
               deps.timeout(
                 () =>
-                  deps.kv.put(kvKeys.crmPhone(digits), encodeCrmCacheValue(lookup.answer), {
+                  deps.kv.put(kvKeys.crmPhone(lookupDigits), encodeCrmCacheValue(lookup.answer), {
                     expirationTtl: CRM_KV_TTL_SEC,
                   }),
                 cut(TIMEOUTS.crmCacheWriteMs, budget),
@@ -455,7 +468,7 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
 
   // Step 11: the one log line.
   logDv(deps, timings, {
-    traceId, callerPhone, accountNumber, identity,
+    traceId, channel, callerPhone, accountNumber, identity,
     area: customer?.postcode ?? null, areaOutage, repeatCaller,
     cache: cacheSource, cacheWrite,
     outcome: reasons.length === 0 ? "ok" : "degraded", reasons, status: 200,

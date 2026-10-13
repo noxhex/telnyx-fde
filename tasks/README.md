@@ -73,7 +73,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T12 | Workflow content | T19 | done |
 | T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged second run comes with T23 |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
-| T22 | Calls that survive a replica's first use | T20 | ready |
+| T22 | Calls that survive a replica's first use | T20 | done, voice-context and voice-tools to ship |
 | T23 | The disclosure line once, and the disclosure tool's session id | T11 | ready |
 | T15 | Demo tooling: flags, simulated outage reports and a reset | T22 | ready |
 | T14 | A warm-up before the review | T22 | ready |

@@ -140,7 +140,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-014. Strict routing, authentication before state
 
-**Status.** Accepted. On 12 October Thiago allowed one exception for reads. mock-crm starts its two secret reads and its flags read on a container's first request of any kind, unknown paths included, once per container and without waiting for them. So its first keyed lookup waits for the slowest read instead of their sum (T20, DEBUGLOG issue 15). Nothing changes state before authentication.
+**Status.** Accepted. On 12 October Thiago allowed one exception for reads. mock-crm starts its two secret reads and its flags read on a container's first request of any kind, unknown paths included, once per container and without waiting for them. So its first keyed lookup waits for the slowest read instead of their sum (T20, DEBUGLOG issue 15). On 13 October Claude Code extended the same exception to voice-context and voice-tools (T22, DEBUGLOG issue 17), under Thiago's go-ahead for code that survives a replica's first use. Nothing changes state before authentication.
 
 **Evidence.** DEBUGLOG issue 4. The sample actor function changed state on every path, including a browser's favicon request and an unexplained visitor.
 

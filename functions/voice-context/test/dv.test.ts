@@ -25,8 +25,11 @@ import { createKvFake } from "../../../packages/shared/test/fakes/kv.js";
 import type { KvFake } from "../../../packages/shared/test/fakes/kv.js";
 
 import type { AccountsClient, RecordCallOutcome } from "../src/clients/accounts.js";
+import { createCrmClient } from "../src/clients/crm.js";
 import type { CrmCallResult, CrmClient } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
+import { createSecretStore } from "../src/index.js";
+import type { SecretStore } from "../src/index.js";
 import { DEFAULT_FLAGS, parseFlags, TIMED_OUT } from "../src/config.js";
 import type { AreaStatusDoc, CrmAnswer, DvFlags, TimeoutRunner } from "../src/config.js";
 import type { CachesDep, SecretsDep, VoiceContextDeps } from "../src/deps.js";
@@ -239,12 +242,27 @@ class SessionsStub implements SessionsClient {
   }
 }
 
+/**
+ * The secrets double, backed by the function's own `createSecretStore` plus
+ * a memoised `getKey` the way index.ts builds them for one container (T22):
+ * a success is kept for the rest of the test, a failed or empty read is
+ * not (the next use reads again), and waiters share a read in flight. So
+ * route tests exercise the same keep-and-join behaviour the deployed
+ * container has.
+ */
 class SecretsStub implements SecretsDep {
   readonly reads: string[] = [];
   /** Handles whose read never settles until the test settles it. */
   readonly held = new Map<string, HeldPromise<string | null>>();
+  private readonly store: SecretStore;
+  private readonly keys = new Map<string, Uint8Array>();
 
-  constructor(readonly values: Record<string, string | null>) {}
+  constructor(readonly values: Record<string, string | null>) {
+    this.store = createSecretStore((handle) => {
+      this.reads.push(handle);
+      return this.held.get(handle)?.promise ?? Promise.resolve(this.values[handle] ?? null);
+    });
+  }
 
   hold(handle: string): HeldPromise<string | null> {
     const held = hold<string | null>();
@@ -253,24 +271,24 @@ class SecretsStub implements SecretsDep {
   }
 
   get(handle: string): Promise<string | null> {
-    this.reads.push(handle);
-    return this.held.get(handle)?.promise ?? Promise.resolve(this.values[handle] ?? null);
+    return this.store.read(handle);
   }
 
-  getKey(handle: string): Promise<Uint8Array | null> {
-    this.reads.push(handle);
-    const heldRead = this.held.get(handle);
-    if (heldRead !== undefined) {
-      return heldRead.promise.then(() => null);
+  async getKey(handle: string): Promise<Uint8Array | null> {
+    const hit = this.keys.get(handle);
+    if (hit !== undefined) {
+      return hit;
     }
-    const raw = this.values[handle];
-    if (raw === undefined || raw === null) {
-      return Promise.resolve(null);
+    const raw = await this.store.read(handle);
+    if (raw === null) {
+      return null;
     }
     try {
-      return Promise.resolve(parseKey(raw));
+      const bytes = parseKey(raw);
+      this.keys.set(handle, bytes);
+      return bytes;
     } catch {
-      return Promise.resolve(null);
+      return null;
     }
   }
 }
@@ -710,7 +728,71 @@ describe("handleDv happy paths", () => {
     // No CRM cache key was read or written for a caller that has no digits.
     const crmKeyOps = h.kv.calls.filter((c) => c.key?.startsWith("crm/"));
     expect(crmKeyOps).toEqual([]);
-    expect(h.lastLog()).toMatchObject({ caller: null, cache: "miss", outcome: "ok" });
+    expect(h.lastLog()).toMatchObject({
+      caller: null,
+      cache: "miss",
+      outcome: "ok",
+      channel: "websocket",
+    });
+  });
+
+  it("logs telnyx_conversation_channel as received, cut to 32 characters (T22)", async () => {
+    const h = makeHarness();
+    const long = `webrtc-${"x".repeat(80)}`;
+    const { status } = await h.call(
+      makeDvBody({ telnyx_conversation_channel: long }),
+    );
+    expect(status).toBe(200);
+    expect(h.lastLog().channel).toBe(long.slice(0, 32));
+    expect((h.lastLog().channel as string).length).toBe(32);
+
+    const second = makeHarness();
+    await second.call(makeDvBody());
+    expect(second.lastLog().channel).toBe("phone_call");
+  });
+
+  it("a caller with fewer than eight digits gets no lookup and no crm/phone key, anonymous like no phone (T22)", async () => {
+    const h = makeHarness();
+    // Seven digits, the way 13 October's browser test call arrived.
+    const { status, body } = await h.call(
+      makeDvBody({ telnyx_end_user_target: "+3249124" }),
+    );
+    expect(status).toBe(200);
+    expect(body.dynamic_variables).toMatchObject({
+      caller_known: "false",
+      identity_level: "anonymous",
+      greeting_line: "Hello",
+    });
+    // No mock-crm call, no CRM cache read or write, no 404 cached as
+    // "not found" (DEBUGLOG issue 17).
+    expect(h.crm.calls).toEqual([]);
+    expect(h.kv.calls.filter((c) => c.key?.startsWith("crm/"))).toEqual([]);
+    // Still a session with the caller's phone, and an untroubled log line.
+    expect(h.sessions.creates[0]).toEqual({
+      sid: SID,
+      input: {
+        traceId: CALL_CONTROL_ID,
+        identity: "anonymous",
+        callerPhone: "+3249124",
+        nowMs: T0,
+      },
+    });
+    expect(h.lastLog()).toMatchObject({
+      identity: "anonymous",
+      outcome: "ok",
+      reasons: [],
+      channel: "phone_call",
+    });
+
+    // The boundary: exactly eight digits do get a lookup.
+    const second = makeHarness();
+    await second.call(makeDvBody({ telnyx_end_user_target: "+32491244" }));
+    expect(second.crm.calls).toEqual(["32491244"]);
+    expect(
+      second.kv.calls.some(
+        (c) => c.method === "get" && c.key === kvKeys.crmPhone("32491244"),
+      ),
+    ).toBe(true);
   });
 
   it("reads repeat_caller true from recordCall", async () => {
@@ -731,8 +813,8 @@ describe("handleDv happy paths", () => {
       1_000, // flags/global
       1_000, // MCP_TOKEN_KEY
       1_000, // MCP_ENC_KEY
-      1_500, // the CRM lookup race
-      1_500, 1_500, 1_500, 1_500, 1_500, // the five area statuses
+      2_000, // the CRM lookup race (T22: covers the key read and a cold mock-crm)
+      2_000, 2_000, 2_000, 2_000, 2_000, // the five area statuses (T22)
       600, // recordCall
       1_000, // SESSION.create
       2_500, // the CRM cache write
@@ -867,6 +949,131 @@ describe("handleDv degraded CRM", () => {
   });
 });
 
+// ---------- the INTERNAL_KEY read inside the CRM bound (T22) ----------
+
+describe("handleDv: the key read counts against the lookup's own bound (T22)", () => {
+  /**
+   * Wires the real CRM client into the harness: its `readInternalKey` and
+   * its fetch are held by the test, so the key read and mock-crm's answer
+   * land when the test says, measured on the fake clock.
+   */
+  function wireRealCrm(h: Harness): {
+    heldKey: HeldPromise<string | null>;
+    heldFetch: HeldPromise<Response>;
+    fetchCalls: { url: string; init?: RequestInit }[];
+  } {
+    const heldKey = hold<string | null>();
+    const heldFetch = hold<Response>();
+    const fetchCalls: { url: string; init?: RequestInit }[] = [];
+    h.deps.crm = createCrmClient({
+      crmUrl: "http://mock-crm.test",
+      readInternalKey: () => heldKey.promise,
+      fetchImpl: ((url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init });
+        return heldFetch.promise;
+      }) as unknown as typeof fetch,
+    });
+    return { heldKey, heldFetch, fetchCalls };
+  }
+
+  it("identifies the caller when the key lands at 1,200 ms and mock-crm 600 ms later", async () => {
+    const h = makeHarness();
+    const { heldKey, heldFetch, fetchCalls } = wireRealCrm(h);
+    const pending = h.call(makeDvBody());
+    await tick();
+
+    // The whole lookup race gets the card's 2,000 ms — the key read and
+    // mock-crm's answer fit inside it one after another. Before T22 the key
+    // read was cut at 1,000 ms and this exact scenario was `crm_error`
+    // (DEBUGLOG issue 17, Thiago's call at 12:35).
+    expect(h.timers.entries.map((e) => e.ms)).toEqual([
+      1_000, 1_000, 1_000, 1_000, // public key, flags, two token keys
+      2_000, // the lookup race: no separate 1,000 ms cut for INTERNAL_KEY
+      2_000, 2_000, 2_000, 2_000, 2_000, // the five area statuses
+    ]);
+
+    h.clock.advance(1_200);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]?.url).toBe(
+      `http://mock-crm.test/customers?phone=${CALLER_DIGITS}`,
+    );
+    expect(fetchCalls[0]?.init?.headers).toEqual({ "x-internal-key": INTERNAL_KEY });
+
+    h.clock.advance(600);
+    heldFetch.resolve(Response.json(CUSTOMER));
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    const dynamic = body.dynamic_variables as Record<string, string>;
+    expect(dynamic.first_name).toBe("Marie");
+    expect(dynamic.identity_level).toBe("number_match");
+    expect(h.timers.entries[4]?.fired).toBe(false);
+    expect(h.lastLog()).toMatchObject({
+      identity: "number_match",
+      outcome: "ok",
+      reasons: [],
+      cache: "miss",
+      cache_write: "ok",
+    });
+    const latency = h.lastLog().latency_ms as Record<string, unknown>;
+    expect(latency.crm).toBe(1_800);
+  });
+
+  it("still identifies the caller at exactly 2,000 ms combined (key 1,200 + mock-crm 800)", async () => {
+    const h = makeHarness();
+    const { heldKey, heldFetch } = wireRealCrm(h);
+    const pending = h.call(makeDvBody());
+    await tick();
+
+    h.clock.advance(1_200);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    h.clock.advance(800);
+    heldFetch.resolve(Response.json(CUSTOMER));
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
+    expect(h.timers.entries[4]?.fired).toBe(false);
+    expect(h.lastLog()).toMatchObject({ outcome: "ok", reasons: [] });
+  });
+
+  it("at 2,001 ms combined the race times out: anonymous with crm_timeout, and the late answer is absorbed", async () => {
+    const h = makeHarness();
+    const { heldKey, heldFetch } = wireRealCrm(h);
+    const pending = h.call(makeDvBody());
+    await tick();
+
+    h.clock.advance(1_200);
+    heldKey.resolve(INTERNAL_KEY);
+    await tick();
+    h.clock.advance(801);
+    expect(h.timers.entries[4]?.ms).toBe(2_000);
+    h.timers.entries[4]?.fire();
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect(body.dynamic_variables).toMatchObject({
+      caller_known: "false",
+      identity_level: "anonymous",
+    });
+    expect(h.lastLog()).toMatchObject({
+      outcome: "degraded",
+      reasons: ["crm_timeout"],
+      cache: "miss",
+    });
+
+    // mock-crm's answer lands after the timeout: absorbed quietly, never
+    // cached, no second log line.
+    heldFetch.resolve(Response.json(CUSTOMER));
+    await tick();
+    expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
+    expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
+  });
+});
+
 // ---------- degraded actors, sessions, secrets, flags ----------
 
 describe("handleDv degraded actors and sessions", () => {
@@ -976,6 +1183,12 @@ describe("handleDv secrets and forced error", () => {
     heldRead.resolve(TOKEN_KEY_RAW);
     await tick();
     expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
+
+    // T22: the late success is kept for the container's life, so the very
+    // next call mints its token without reading the secret again.
+    const second = await h.call();
+    expect(second.status).toBe(200);
+    expect(h.secrets.reads.filter((r) => r === "MCP_TOKEN_KEY")).toHaveLength(1);
   });
 
   it("a public key read that never settles fails the signature check 403 no_key", async () => {
@@ -1036,6 +1249,82 @@ describe("handleDv areas", () => {
     h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
     const { body } = await h.call(makeDvBody());
     expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
+  });
+
+  it("an area read that settles at exactly 2,000 ms (the T22 bound) is used for the caller's outage notice", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldGet = hold<unknown>();
+    const inner = h.deps.kv;
+    h.deps.kv = {
+      get: ((key: unknown, options: unknown) =>
+        key === kvKeys.areaStatus("8630")
+          ? heldGet.promise
+          : (inner.get as (k: never, o: never) => Promise<unknown>)(key as never, options as never)),
+      put: inner.put.bind(inner),
+      delete: inner.delete.bind(inner),
+      list: inner.list.bind(inner),
+    } as unknown as KvFake;
+
+    const pending = h.call(makeDvBody());
+    await tick();
+    // The held read is the only pending 2,000 ms entry.
+    const areaEntry = h.timers.pending().find((e) => e.ms === 2_000);
+    expect(areaEntry).toBeDefined();
+    h.clock.advance(2_000);
+    heldGet.resolve(OUTAGE);
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect(areaEntry?.fired).toBe(false);
+    expect(body.dynamic_variables).toMatchObject({
+      area_outage: "true",
+      outage_eta: "by 18:00 today",
+    });
+    expect(h.lastLog()).toMatchObject({ area_outage: "true", outcome: "ok", reasons: [] });
+  });
+
+  it("an area read settling at 2,001 ms times out: area_outage false with area_unknown, and the late answer is absorbed", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldGet = hold<unknown>();
+    const inner = h.deps.kv;
+    h.deps.kv = {
+      get: ((key: unknown, options: unknown) =>
+        key === kvKeys.areaStatus("8630")
+          ? heldGet.promise
+          : (inner.get as (k: never, o: never) => Promise<unknown>)(key as never, options as never)),
+      put: inner.put.bind(inner),
+      delete: inner.delete.bind(inner),
+      list: inner.list.bind(inner),
+    } as unknown as KvFake;
+
+    const pending = h.call(makeDvBody());
+    await tick();
+    const areaEntry = h.timers.pending().find((e) => e.ms === 2_000);
+    expect(areaEntry).toBeDefined();
+    h.clock.advance(2_001);
+    areaEntry?.fire();
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
+    expect(h.lastLog()).toMatchObject({
+      outcome: "degraded",
+      reasons: ["area_unknown"],
+      area_outage: "false",
+    });
+
+    // The late answer is absorbed: not cached, and the next call reads the
+    // area again.
+    heldGet.resolve(OUTAGE);
+    await tick();
+    expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
+    h.deps.kv = h.kv;
+    h.kv.reset();
+    await h.call(makeDvBody());
+    const areaGets = h.kv.calls.filter((c) => c.method === "get" && c.key?.startsWith("area/"));
+    expect(areaGets.map((c) => c.key)).toEqual([kvKeys.areaStatus("8630")]);
   });
 
   it("a failed read of the caller's own area answers area_outage false, degraded with area_unknown", async () => {

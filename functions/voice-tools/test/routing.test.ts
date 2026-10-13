@@ -322,37 +322,37 @@ describe("the per-container secret memo, through default.fetch", () => {
     expect(secretReads.filter((h) => h === "MCP_TOKEN_KEY")).toHaveLength(2);
   });
 
-  it("a failed INTERNAL_KEY read makes no call to mock-crm, and the next tool call works", async () => {
+  it("a failed INTERNAL_KEY read is not kept: the first tool call reads again and reaches mock-crm, the next joins the kept success (T22)", async () => {
     const { env, secretReads, failNextSecretRead } = makeMemoEnv();
     failNextSecretRead("INTERNAL_KEY");
     const { post } = await freshModule();
     const fetchStub = vi.fn().mockImplementation(() => Promise.resolve(Response.json(MEMO_LINE_RESULT)));
     vi.stubGlobal("fetch", fetchStub);
     try {
-      const failed = await post(DIAGNOSE, env);
-      expect(failed.status).toBe(200);
-      // No key, so no outbound call was ever attempted (a 401 from mock-crm
-      // would just be another failure).
-      expect(fetchStub).not.toHaveBeenCalled();
-      expect(failed.body).toMatchObject({
-        result: { isError: true },
-      });
+      // The first request warms the container: its INTERNAL_KEY read
+      // consumes the armed failure and keeps nothing. A ping needs no
+      // internal key, so the warm-up settles here, deterministically.
+      const ping = await post(PING, env);
+      expect(ping.status).toBe(200);
+      expect(secretReads.filter((h) => h === "INTERNAL_KEY")).toHaveLength(1);
 
-      // The failed read was not kept: the very next tool call reads the key
-      // again and reaches mock-crm.
-      const recovered = await post(DIAGNOSE, env);
-      expect(recovered.status).toBe(200);
-      expect(recovered.body).toMatchObject({
+      // The failed read was not kept: the first tool call reads the key
+      // again — and gets in, so its call to mock-crm succeeds.
+      const first = await post(DIAGNOSE, env);
+      expect(first.status).toBe(200);
+      expect(first.body).toMatchObject({
         result: {
           content: [{ type: "text", text: JSON.stringify(MEMO_LINE_RESULT) }],
         },
       });
       expect(fetchStub).toHaveBeenCalledTimes(1);
+      // Two reads in total: the failed warm-up one and the tool's retry.
       expect(secretReads.filter((h) => h === "INTERNAL_KEY")).toHaveLength(2);
 
-      // The success is memoised: a third tool call needs no third key read.
-      const third = await post(DIAGNOSE, env);
-      expect(third.status).toBe(200);
+      // The retry's success is kept for the container's life: the next
+      // tool call needs no third read.
+      const second = await post(DIAGNOSE, env);
+      expect(second.status).toBe(200);
       expect(fetchStub).toHaveBeenCalledTimes(2);
       expect(secretReads.filter((h) => h === "INTERNAL_KEY")).toHaveLength(2);
     } finally {

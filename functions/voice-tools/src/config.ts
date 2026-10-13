@@ -20,8 +20,8 @@ export const TIMEOUTS = {
   /** `SESSION.get` on the MCP path, `SESSION.create` on /internal/sessions. */
   sessionGetMs: 1_000,
   sessionCreateMs: 1_000,
-  /** One area status KV read, behind the memory cache (a KV read takes about 0.8 s — DEBUGLOG issue 11). */
-  areaStatusMs: 1_500,
+  /** One area status KV read, behind the memory cache (T22: KV reads took 1,083 to 1,639 ms on 13 October — DEBUGLOG issue 17). */
+  areaStatusMs: 2_000,
   /** mock-crm `POST /lines/<lineId>/test`, slow on purpose (its fake waits 0.8 to 1.5 s). */
   crmLineTestMs: 5_000,
   /** `SESSION.setVerified` and `SESSION.recordVerifyFailure` (T19). */
@@ -36,8 +36,14 @@ export const TIMEOUTS = {
   flagsMs: 1_000,
   /** The anonymous callback write to `callback/<sid>` (T19; a KV write takes about 1.4 s — DEBUGLOG issue 11). */
   callbackWriteMs: 2_500,
-  /** mock-crm `GET /accounts/<number>`, an estimate until T10 measures the call between functions (T19). */
-  crmAccountMs: 1_500,
+  /**
+   * mock-crm `GET /accounts/<number>` inside `verify_account`. T22: covers
+   * two first uses in a row — this replica's `INTERNAL_KEY` read inside
+   * `getAccount` (0.55 to over 1.0 s cold, no longer cut at
+   * `SECRET_READ_TIMEOUT_MS`) and mock-crm's own 1,000 ms read window on a
+   * cold replica (T20), about 1.7 s together (DEBUGLOG issue 17).
+   */
+  crmAccountMs: 2_500,
 } as const;
 
 /** The per-container memory-cache lifetime for area statuses (ADR-019). */

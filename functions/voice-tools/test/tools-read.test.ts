@@ -387,7 +387,7 @@ describe("check_area_status", () => {
     expect(answer.isErrorText).toBe("The area status system is not responding right now.");
   });
 
-  it("a held KV read times out at exactly 1,500 ms; the late answer is absorbed and not cached", async () => {
+  it("a KV read settling at exactly 2,000 ms (the T22 bound) answers the outage", async () => {
     const h = makeHarness({});
     const held = hold<unknown>();
     const realGet = h.kv.get.bind(h.kv);
@@ -401,7 +401,35 @@ describe("check_area_status", () => {
 
     const pending = h.callTool("check_area_status", { postcode: "8630" });
     await tick();
-    const kvTimer = h.timers.pending().find((e) => e.ms === 1_500);
+    const kvTimer = h.timers.pending().find((e) => e.ms === 2_000);
+    expect(kvTimer).toBeDefined();
+    h.clock.advance(2_000);
+    held.resolve(OUTAGE_DOC);
+    const answer = await pending;
+
+    expect(kvTimer?.fired).toBe(false);
+    expect(answer.result).toEqual({
+      area_name: "Veurne",
+      state: "outage",
+      eta: "Tuesday around 18:00",
+    });
+  });
+
+  it("a held KV read times out at exactly 2,000 ms (T22); the late answer is absorbed and not cached", async () => {
+    const h = makeHarness({});
+    const held = hold<unknown>();
+    const realGet = h.kv.get.bind(h.kv);
+    h.kv.get = ((key: string, options: unknown) => {
+      if (typeof key === "string" && key.startsWith("area/")) {
+        h.kv.calls.push({ method: "get", key });
+        return held.promise;
+      }
+      return (realGet as (k: string, o: unknown) => Promise<unknown>)(key, options);
+    }) as KvFake["get"];
+
+    const pending = h.callTool("check_area_status", { postcode: "8630" });
+    await tick();
+    const kvTimer = h.timers.pending().find((e) => e.ms === 2_000);
     expect(kvTimer).toBeDefined();
     kvTimer?.fire();
     const answer = await pending;
