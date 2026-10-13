@@ -245,10 +245,10 @@ describe("the payloads the script sends", () => {
         async: false,
         body_parameters: {
           type: "object",
-          properties: { session_id: { type: "string" } },
-          required: ["session_id"],
+          properties: {},
           additionalProperties: false,
         },
+        preset_body_fields: { session_id: "{{session_id}}" },
       },
     });
     expect(creates[1]?.body).toEqual({
@@ -293,10 +293,8 @@ describe("the payloads the script sends", () => {
     expect(body["model"]).toBe("moonshotai/Kimi-K2.6");
     expect(body["instructions"]).toBe(loadInstructions().base);
     expect(body["enabled_features"]).toEqual(["telephony"]);
-    expect(body["greeting"]).toBe(
-      "{{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, " +
-        "and this call is recorded so we can improve our service.",
-    );
+    /* T23: the greeting is empty, so the call hears only the Disclosure node's line (DEBUGLOG issue 18). */
+    expect(body["greeting"]).toBe("");
     expect(body["voice_settings"]).toEqual({
       voice: "Telnyx.Ultra.f786b574-daa5-4673-aa0c-cbe3e8534c02",
       voice_speed: 1,

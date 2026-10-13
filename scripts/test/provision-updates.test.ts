@@ -143,6 +143,164 @@ describe("a changed desired state", () => {
   });
 });
 
+describe("the greeting read-backs T23 accepts", () => {
+  /**
+   * The run's own ids file, so the second run prints `unchanged` everywhere
+   * instead of writing the ids again.
+   */
+  async function firstRun(api: FakeApi): Promise<Record<string, unknown>> {
+    const first = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(first);
+    return JSON.parse(first.written[0] ?? "{}") as Record<string, unknown>;
+  }
+
+  it("counts a greeting read back as null or absent as unchanged", async () => {
+    const api = new FakeApi();
+    const idsFile = await firstRun(api);
+    const stored = api.assistants[0];
+    if (stored === undefined) {
+      throw new Error("the first run created no assistant");
+    }
+
+    stored.managed["greeting"] = null;
+    const before = api.requests.length;
+    const second = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(second);
+    expect(api.requests.slice(before).every((r) => r.method === "GET")).toBe(true);
+    expect(second.lines).toContain("assistant Duinvezel Support (assistant-0001-uuid): unchanged");
+
+    const beforeAbsent = api.requests.length;
+    delete stored.managed["greeting"];
+    const third = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(third);
+    expect(api.requests.slice(beforeAbsent).every((r) => r.method === "GET")).toBe(true);
+    expect(third.lines).toContain("assistant Duinvezel Support (assistant-0001-uuid): unchanged");
+  });
+});
+
+describe("the state the T11 run left", () => {
+  /* T11 sent the Disclosure line as the greeting, and a disclosure tool whose
+   * body_parameters asked the model for session_id with no preset (DEBUGLOG
+   * issues 18 and 19). */
+  const OLD_GREETING =
+    "{{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, " +
+    "and this call is recorded so we can improve our service.";
+
+  /** Rewinds the assistant's greeting and the disclosure tool to the shapes the T11 run created. */
+  function rewindToT11(api: FakeApi): void {
+    const stored = api.assistants[0];
+    if (stored === undefined) {
+      throw new Error("the first run created no assistant");
+    }
+    stored.managed["greeting"] = OLD_GREETING;
+    const disclosure = api.tools.find((tool) => tool.body["display_name"] === "duinvezel-log-disclosure");
+    if (disclosure === undefined) {
+      throw new Error("the first run created no disclosure tool");
+    }
+    disclosure.body = {
+      display_name: "duinvezel-log-disclosure",
+      type: "webhook",
+      timeout_ms: 5000,
+      webhook: {
+        name: "log_disclosure",
+        description: "Records that the disclosure was played on this call.",
+        url: "https://voice-context-00d2df1a-d.telnyxcompute.com/tools/disclosure",
+        method: "POST",
+        async: false,
+        body_parameters: {
+          type: "object",
+          properties: { session_id: { type: "string" } },
+          required: ["session_id"],
+          additionalProperties: false,
+        },
+      },
+    };
+  }
+
+  async function t11Account(): Promise<{ api: FakeApi; idsFile: Record<string, unknown> }> {
+    const api = new FakeApi();
+    const first = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(first);
+    rewindToT11(api);
+    return { api, idsFile: JSON.parse(first.written[0] ?? "{}") as Record<string, unknown> };
+  }
+
+  it("a dry run against the old greeting prints would update (greeting) and sends no write", async () => {
+    const { api, idsFile } = await t11Account();
+    const before = api.requests.length;
+    const deps = makeDeps({
+      api,
+      timeoutRunner: new ManualTimeouts().runner,
+      overrides: { dryRun: true, idsFile },
+    });
+    await provision(deps);
+
+    expect(api.requests.slice(before).every((r) => r.method === "GET")).toBe(true);
+    expect(deps.lines).toEqual([
+      "secret mcp_enc_key: present",
+      "tool duinvezel-log-disclosure (tool-0001-uuid): would update (webhook)",
+      "tool duinvezel-transfer (tool-0002-uuid): unchanged",
+      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
+      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
+      "assistant Duinvezel Support (assistant-0001-uuid): would update (greeting)",
+      "phone_number ...0143 (pn-0001): unchanged",
+      "ids infra/ids.json: unchanged",
+    ]);
+    expect(deps.written).toHaveLength(0);
+  });
+
+  it("the real run updates the disclosure tool's preset and the assistant's greeting, and nothing else", async () => {
+    const { api, idsFile } = await t11Account();
+    const before = api.requests.length;
+    const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(deps);
+    const requests = api.requests.slice(before);
+
+    expect(requests.filter((r) => r.method !== "GET").map((r) => `${r.method} ${r.path}`)).toEqual([
+      "PATCH /ai/tools/tool-0001-uuid",
+      "POST /ai/assistants/assistant-0001-uuid",
+    ]);
+    expect(deps.lines).toEqual([
+      "secret mcp_enc_key: present",
+      "tool duinvezel-log-disclosure (tool-0001-uuid): updated (webhook)",
+      "tool duinvezel-transfer (tool-0002-uuid): unchanged",
+      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
+      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
+      "assistant Duinvezel Support (assistant-0001-uuid): updated (greeting)",
+      "phone_number ...0143 (pn-0001): unchanged",
+      "ids infra/ids.json: unchanged",
+    ]);
+
+    const patch = requests.find((r) => r.method === "PATCH")?.body as Record<string, unknown>;
+    const webhook = patch["webhook"] as Record<string, unknown>;
+    expect(webhook["preset_body_fields"]).toEqual({ session_id: "{{session_id}}" });
+    expect(webhook["body_parameters"]).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect((requests.find((r) => r.method === "POST")?.body as Record<string, unknown>)["greeting"]).toBe("");
+  });
+
+  it("the run after that prints unchanged for every resource", async () => {
+    const { api, idsFile } = await t11Account();
+    await provision(makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } }));
+
+    const before = api.requests.length;
+    const deps = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(deps);
+
+    expect(api.requests.slice(before).every((r) => r.method === "GET")).toBe(true);
+    expect(deps.lines).toEqual([
+      "secret mcp_enc_key: present",
+      "tool duinvezel-log-disclosure (tool-0001-uuid): unchanged",
+      "tool duinvezel-transfer (tool-0002-uuid): unchanged",
+      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
+      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
+      "assistant Duinvezel Support (assistant-0001-uuid): unchanged",
+      "phone_number ...0143 (pn-0001): unchanged",
+      "ids infra/ids.json: unchanged",
+    ]);
+    expect(deps.written).toHaveLength(0);
+  });
+});
+
 describe("the tools the script does not own", () => {
   it("gets no request to any of the five existing tools' ids", async () => {
     const api = new FakeApi();

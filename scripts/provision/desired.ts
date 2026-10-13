@@ -78,8 +78,12 @@ export type SharedToolDesired = {
 /**
  * The three shared tools, in the order the script provisions them. The
  * transfer's `from` is the assistant's own number, so the person answering
- * sees the support line; `session_id` on the webhook tool is filled from the
- * dynamic variable of the same name by the tool node (S2, answer 4).
+ * sees the support line. `session_id` on the webhook tool is a preset body
+ * field since T23 (DEBUGLOG issue 19): Telnyx fills the preset from the
+ * dynamic variable of the same name and keeps it out of the model's view, so
+ * `body_parameters` asks the model for nothing
+ * (https://developers.telnyx.com/docs/inference/ai-assistants/preset-webhook-parameters).
+ * Preset body fields are dropped on `GET` tools; this one is a `POST`.
  */
 export function sharedToolBodies(input: {
   voiceContextUrl: string;
@@ -101,10 +105,10 @@ export function sharedToolBodies(input: {
           async: false,
           body_parameters: {
             type: "object",
-            properties: { session_id: { type: "string" } },
-            required: ["session_id"],
+            properties: {},
             additionalProperties: false,
           },
+          preset_body_fields: { session_id: "{{session_id}}" },
         },
       },
     },
@@ -149,10 +153,13 @@ export function mcpServerBody(input: { voiceToolsUrl: string; allowedTools?: rea
 /**
  * The assistant's managed body: the create sends all of it, and an update
  * sends exactly these fields again (the API keeps the fields it does not
- * receive). `tool_ids` is empty — transfer, hangup and the disclosure log
- * run only on their tool nodes (ADR-020). `telephony_settings` is not here:
- * the API's default switches recording on, and when a read finds it off the
- * update sends the settings as read back with only that field changed.
+ * receive). `greeting` is the empty string since T23: the greeting played
+ * alongside the Disclosure speak start node, so every call heard the line
+ * twice (DEBUGLOG issue 18). `tool_ids` is empty — transfer, hangup and the
+ * disclosure log run only on their tool nodes (ADR-020).
+ * `telephony_settings` is not here: the API's default switches recording on,
+ * and when a read finds it off the update sends the settings as read back
+ * with only that field changed.
  */
 export function assistantBody(input: {
   toolIds: ToolIds;
@@ -166,14 +173,12 @@ export function assistantBody(input: {
     toolIds: input.toolIds,
     instructions: input.instructions,
   });
-  const disclosure = flow.nodes.find((node) => node.id === "n_disclosure");
-  const greeting = disclosure !== undefined && "message" in disclosure ? disclosure.message : undefined;
   return {
     name: ASSISTANT_NAME,
     model: ASSISTANT_MODEL,
     instructions: input.instructions.base,
     enabled_features: ["telephony"],
-    greeting,
+    greeting: "",
     voice_settings: VOICE_SETTINGS,
     dynamic_variables: { ...DYNAMIC_VARIABLE_DEFAULTS },
     dynamic_variables_webhook_url: `${input.voiceContextUrl}/dv`,

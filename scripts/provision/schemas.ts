@@ -60,7 +60,8 @@ export const assistant = z.looseObject({
   name: z.string().optional(),
   model: z.string().optional(),
   instructions: z.string().optional(),
-  greeting: z.string().optional(),
+  /* The empty greeting of T23 may read back as null; the comparison treats "", null or absent as equal. */
+  greeting: z.string().nullish(),
   enabled_features: z.array(z.string()).optional(),
   voice_settings: jsonObject.optional(),
   dynamic_variables: z.record(z.string(), z.unknown()).optional(),

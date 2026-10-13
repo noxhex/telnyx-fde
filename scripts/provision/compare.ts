@@ -13,6 +13,9 @@
  * - Numbers match by value, so the API's `300.0` matches `300`.
  * - A shared tool's `<type>` object is compared with the API's
  *   `tool_definition` (DEBUGLOG, S2 findings).
+ * - The greeting goes out as the empty string (DEBUGLOG issue 18), and a
+ *   read-back of `""`, `null` or no `greeting` at all counts as equal; any
+ *   other text is a difference.
  */
 
 import type { JsonObject } from "./schemas.ts";
@@ -92,6 +95,18 @@ export function matchToolIds(expected: unknown, actualTools: unknown): boolean {
 }
 
 /**
+ * The greeting goes out as the empty string, and the API may read that back
+ * as `""`, `null` or no `greeting` at all; all three count as equal. Any
+ * other text — such as the Disclosure line T11 sent — is a difference.
+ */
+export function matchGreeting(expected: unknown, actual: unknown): boolean {
+  if (expected === "" && (actual === "" || actual === null || actual === undefined)) {
+    return true;
+  }
+  return matchValue(expected, actual);
+}
+
+/**
  * The assistant's managed fields, in the order their names appear in an
  * `updated (...)` line. `telephony_settings` is not among them: it is only
  * ever sent when a read finds recording off, and then as the API returned it
@@ -124,6 +139,10 @@ export function diffAssistant(desired: JsonObject, actual: JsonObject): string[]
       if (!matchToolIds(desired[field], actual["tools"])) {
         changed.push(field);
       }
+    } else if (field === "greeting") {
+      if (!matchGreeting(desired[field], actual[field])) {
+        changed.push(field);
+      }
     } else if (!matchValue(desired[field], actual[field])) {
       changed.push(field);
     }
@@ -131,7 +150,13 @@ export function diffAssistant(desired: JsonObject, actual: JsonObject): string[]
   return changed;
 }
 
-/** The managed fields of a shared tool; the `<type>` object is compared with `tool_definition`. */
+/**
+ * The managed fields of a shared tool; the `<type>` object is compared with
+ * `tool_definition`. `preset_body_fields` is a managed field of the
+ * disclosure tool like the rest of its `webhook` object: it sits inside that
+ * object, so this same comparison covers it, and an old read-back without a
+ * preset differs.
+ */
 export function diffTool(desired: JsonObject, actual: JsonObject): string[] {
   const changed: string[] = [];
   for (const field of ["display_name", "type", "timeout_ms"]) {

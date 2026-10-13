@@ -14,14 +14,21 @@ import {
   diffMcpServer,
   diffTool,
   matchConversationFlow,
+  matchGreeting,
   matchToolIds,
   matchValue,
   recordingIsOn,
   telephonySettingsWithRecordingOn,
 } from "../provision/compare.ts";
+import { sharedToolBodies } from "../provision/desired.ts";
 
 const instructions = loadInstructions();
 const toolIds = { logDisclosure: "t-1", transfer: "t-2", hangup: "t-3" };
+
+/** The greeting T11 sent, which played alongside the speak node (DEBUGLOG issue 18). */
+const OLD_DISCLOSURE_LINE =
+  "{{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, " +
+  "and this call is recorded so we can improve our service.";
 
 describe("matchValue", () => {
   it("matches numbers by value and nothing looser", () => {
@@ -146,6 +153,65 @@ describe("diffTool", () => {
   });
 });
 
+describe("diffTool on the disclosure tool", () => {
+  const disclosure = sharedToolBodies({
+    voiceContextUrl: "https://voice-context.example.com",
+    transferTo: "+32470001122",
+    phoneNumber: "+12025550143",
+  }).find((tool) => tool.key === "logDisclosure");
+  if (disclosure === undefined) {
+    throw new Error("the disclosure tool body is missing");
+  }
+  const desired = disclosure.body;
+  const webhook = desired["webhook"] as Record<string, unknown>;
+  const asRead = {
+    id: "t-1",
+    display_name: "duinvezel-log-disclosure",
+    type: "webhook",
+    timeout_ms: 5000,
+    created_at: "2026-10-12T13:00:00.000Z",
+  };
+
+  /* The shape the T11 run created: session_id in body_parameters and no preset (DEBUGLOG issue 19). */
+  const oldDefinition = {
+    name: "log_disclosure",
+    description: "Records that the disclosure was played on this call.",
+    url: "https://voice-context.example.com/tools/disclosure",
+    method: "POST",
+    async: false,
+    body_parameters: {
+      type: "object",
+      properties: { session_id: { type: "string" } },
+      required: ["session_id"],
+      additionalProperties: false,
+    },
+  };
+
+  it("updates a read-back in the T11 shape, because the preset is missing", () => {
+    expect(diffTool(desired, { ...asRead, tool_definition: oldDefinition })).toEqual(["webhook"]);
+  });
+
+  it("is unchanged on a read-back in the new shape, with keys the API adds ignored", () => {
+    const newDefinition = {
+      ...webhook,
+      headers: { "Content-Type": "application/json" },
+      preset_query_params: {},
+    };
+    expect(diffTool(desired, { ...asRead, tool_definition: newDefinition })).toEqual([]);
+  });
+
+  it("counts a changed or missing preset as a difference", () => {
+    expect(
+      diffTool(desired, {
+        ...asRead,
+        tool_definition: { ...webhook, preset_body_fields: { session_id: "{{other}}" } },
+      }),
+    ).toEqual(["webhook"]);
+    const { preset_body_fields: _dropped, ...withoutPreset } = webhook;
+    expect(diffTool(desired, { ...asRead, tool_definition: withoutPreset })).toEqual(["webhook"]);
+  });
+});
+
 describe("diffMcpServer", () => {
   const desired = {
     name: "duinvezel-voice-tools",
@@ -162,6 +228,44 @@ describe("diffMcpServer", () => {
     ).toEqual(["allowed_tools"]);
     expect(diffMcpServer(desired, { id: "s-1", ...desired, url: "https://other.example.com/mcp" })).toEqual(["url"]);
     expect(diffMcpServer(desired, { id: "s-1", ...desired, api_key_ref: null })).toEqual(["api_key_ref"]);
+  });
+});
+
+describe("matchGreeting", () => {
+  it("counts \"\", null or no greeting at all as equal to the empty greeting, and any other text as a difference", () => {
+    expect(matchGreeting("", "")).toBe(true);
+    expect(matchGreeting("", null)).toBe(true);
+    expect(matchGreeting("", undefined)).toBe(true);
+    expect(matchGreeting("", OLD_DISCLOSURE_LINE)).toBe(false);
+    expect(matchGreeting("", "Hello")).toBe(false);
+  });
+});
+
+describe("diffAssistant greeting", () => {
+  const desired: Record<string, unknown> = {
+    name: "Duinvezel Support",
+    model: "moonshotai/Kimi-K2.6",
+    instructions: "base",
+    enabled_features: ["telephony"],
+    greeting: "",
+    voice_settings: { voice: "v" },
+    dynamic_variables: { session_ok: "false" },
+    dynamic_variables_webhook_url: "https://example.com/dv",
+    dynamic_variables_webhook_timeout_ms: 4000,
+    mcp_servers: [{ id: "s-1", allowed_tools: ["verify_account"] }],
+    tool_ids: [],
+    conversation_flow: { start_node_id: "n_disclosure", nodes: [], edges: [] },
+  };
+
+  it("counts a read-back of \"\", null or none as unchanged", () => {
+    expect(diffAssistant(desired, { ...desired, tools: [], greeting: "" })).toEqual([]);
+    expect(diffAssistant(desired, { ...desired, tools: [], greeting: null })).toEqual([]);
+    const withoutGreeting = Object.fromEntries(Object.entries(desired).filter(([key]) => key !== "greeting"));
+    expect(diffAssistant(desired, { ...withoutGreeting, tools: [] })).toEqual([]);
+  });
+
+  it("counts the old Disclosure line as a difference in greeting and nothing else", () => {
+    expect(diffAssistant(desired, { ...desired, tools: [], greeting: OLD_DISCLOSURE_LINE })).toEqual(["greeting"]);
   });
 });
 
