@@ -174,7 +174,7 @@ The two token keys, the flags, the CRM lookup and the five area statuses start t
 
 **What the first calls changed.** Two findings of 13 October moved the budget again (DEBUGLOG issue 17).
 
-- A replica reads each secret on first use, and requests spread over several replicas per function, so first uses keep coming long after a ship. Since T22 voice-context and voice-tools start every read on a replica's first request of any kind, as mock-crm has since T20, and a request joins a read already running. The first `/dv` on a fresh replica still pays its public key read, so the warm-up (T14) runs before the review.
+- A replica reads each secret on first use, and requests spread over several replicas per function, so first uses keep coming long after a ship. Since T22 voice-context and voice-tools start every read on a replica's first request of any kind, as mock-crm has since T20, and a request joins a read already running. The first `/dv` on a fresh replica still pays its public key read, so a warm-up runs before the review (README, "Before a demo").
 - KV reads took 1,083 to 1,639 ms, so the area bounds went from 1,500 to 2,000 ms.
 
 ## Security model

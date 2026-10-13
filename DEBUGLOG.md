@@ -458,7 +458,7 @@ mock-crm served its eight requests from four replicas. Each replica keeps a stea
 
 **Cause.** Each replica reads a secret on first use, which took 0.55 to over 1.0 s. mock-crm's replica also waits up to 1,000 ms for its three reads on its first keyed request (T20). A CRM call can meet two first uses in a row, the caller's `INTERNAL_KEY` read and mock-crm's read window, about 1.7 s together. The bounds were 1,000 ms for voice-context's secret read and 1,500 ms for both CRM calls. Requests spread over several replicas per function, so first uses keep coming long after a ship, not only after a quiet night.
 
-**Fix.** Card T22. voice-context and voice-tools start every read on a replica's first request of any kind, as mock-crm has since T20, and the CRM bounds cover two first uses in a row. Card T14 adds a warm-up script that Thiago runs before the review.
+**Fix.** Card T22. voice-context and voice-tools start every read on a replica's first request of any kind, as mock-crm has since T20, and the CRM bounds cover two first uses in a row. Card T14 was to add a warm-up script. Thiago chose the smoke test and one MCP Inspector call from his runbook instead, and the README describes them under "Before a demo".
 
 **Design impact.** ADR-014's exception for reads extends to all three functions, and the budget table in `docs/ARCHITECTURE.md` changes with T22.
 

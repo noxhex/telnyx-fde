@@ -20,3 +20,26 @@ Call **+1 650 536 0717**.
 Before the review the demo state is reset, and two simulated outage reports are put on 8670.
 
 Thiago shows the recognised-caller path from his own phone. That path is a greeting by name, a postcode-only check and the outage notice for his area.
+
+## Before a demo
+
+Each function runs on several replicas, and a replica reads its secrets and flags on first use. On 13 October those reads took 0.55 to over 1 s, and they made two of the first calls miss the caller's account or a verification (DEBUGLOG issue 17). Since T22 a replica starts those reads on its first request of any kind, and a call that meets a fresh replica still gets through. The warm-up makes that case rarer. Before a demo Thiago runs four steps.
+
+1. `scripts/demo.sh reset` clears every fixture account's call history, failures and lock, and every area's reports and incident.
+2. `scripts/smoke.sh` checks each function's health and auth, opens an MCP session with `initialize` and `tools/list`, and runs voice-context's dependency check, which makes a real CRM lookup.
+3. MCP Inspector, with a session token from `POST /internal/sessions`, calls `tools/list` and then `verify_account` for DV-100002 on the deployed `/mcp`. The call's line in voice-tools' log confirms the round trip.
+4. `scripts/demo.sh reports 8670 2` puts two simulated outage reports on Koksijde, one short of the threshold.
+
+Thiago's runbook wraps steps 2 and 3 as `t10_smoke` and `t10_inspector`. It lives outside the repo, because it also sets the secrets.
+
+The warm-up only reaches the replicas that answer it. mock-crm served eight requests from four replicas on 13 October, so a reviewer's call can still meet a fresh one. That call is the case T22 covers.
+
+## Next step, a canary
+
+Nothing watches the assistant between calls yet. The next step is a `Canary` actor in voice-tools.
+
+- **Every 30 seconds** its alarm calls voice-context's `/internal/health`, which makes a real CRM lookup. It then creates a session through `POST /internal/sessions` and runs MCP `initialize` and `tools/list` with it.
+- **Each run** goes to the KV key `canary/last`, with the latency of every check.
+- **After two failed runs in a row** it sends a push notification through ntfy, and one more when it recovers. The topic stays in a secret, `NTFY_TOPIC`. A single failure never alerts, because the health check's KV probe failed on 2 of 22 calls in T10 (DEBUGLOG, T10 measurements).
+- **The test of it** is a flag. `scripts/demo.sh flags set crm_fail true` should bring a push within about a minute, and `scripts/demo.sh flags set crm_fail null` the recovery message.
+- **It would also warm.** Its requests start the reads on the replicas they reach, so over a few minutes it would do the warm-up's job too.
