@@ -429,6 +429,78 @@ voice-tools and voice-context read the same secrets through the same `env.SECRET
 
 **Design impact.** Our runtime logs may not join a call's lines by trace id. A real call uses its call control id as trace id (`docs/ARCHITECTURE.md`, Observability), and the first real call in T11 shows whether the platform redacts that too. If it does, the trace id needs a form the platform leaves alone. Evidence for a call includes `telnyx-edge actors logs <Type>` and the call's time window (T13, T15).
 
+## 17. The first calls missed a known caller and a verification
+
+**Date** 13 Oct 2026 · **Area** Edge Compute, replicas
+
+**Symptom.** Thiago's first call from `DEMO_CALLER_PHONE`, at 14:35 Brussels time, was not recognised. On his next call the assistant greeted him by name, but `verify_account` failed when he gave his postcode, and the assistant offered a person.
+
+**Evidence.** Claude Code read the runtime and invocation logs of the three functions and the actor logs with read-only commands. Times are UTC, and server times come from the invocation records. The logs hold five calls, two more than Thiago listed.
+
+| Call | `/dv` | `dv` line | What failed |
+|---|---|---|---|
+| 12:35:13, his phone (his call 1) | 2,621 ms | anonymous, `crm_error`, crm 1,001 ms, secret reads 2,036 ms | voice-context's `INTERNAL_KEY` read hit its 1,000 ms bound, so no request reached mock-crm. mock-crm has no invocation before 12:39 |
+| 12:39:36, his phone, ended before Route call | 2,587 ms | anonymous, `crm_timeout`, crm 1,748 ms, secret reads 1,894 ms | voice-context's secret reads, then mock-crm's first keyed request on its replica, 1,023 ms on the server |
+| 12:39:46, his phone (his call 2) | 2,215 ms | `number_match`, crm 300 ms | `verify_account` at 12:40:14, crm 1,500 ms, a timeout. mock-crm's `GET /accounts` was its replica's first keyed request, 1,014 ms on the server, and started 0.66 s after voice-tools began the fetch |
+| 12:43:34, browser (his call 3) | 1,730 ms | anonymous, crm 205 ms | nothing. `verify_account` for Marie and `run_line_diagnostics` passed |
+| 12:45:32, his phone | 1,889 ms | `number_match`, crm 103 ms | `verify_account` at 12:46:03, crm 1,500 ms, a timeout. mock-crm's `GET /accounts` was again a replica's first keyed request, 1,024 ms on the server |
+
+```text
+# telnyx-edge logs mock-crm --type runtime, trimmed. http is the secret reads, kv the wait for the flags.
+[2026-10-13T12:40:16.632Z] {"event":"crm_request","route":"accounts","status":200,"latency_ms":{"total":1014,"http":592,"kv":407}}
+# telnyx-edge logs voice-tools --type runtime, trimmed
+[2026-10-13T12:40:16.457Z] {"event":"mcp","method":"tools/call","tool":"verify_account","outcome":"error","latency_ms":{"total":1636,"actor":127,"crm":1500}}
+```
+
+The 0.66 s before mock-crm's handler started is voice-tools' own first `INTERNAL_KEY` read on its replica. `getAccount` awaits it inside the 1,500 ms bound (`functions/voice-tools/src/clients/crm.ts`). voice-context's lookup does the same inside its bound, after cutting the read at 1,000 ms (`functions/voice-context/src/index.ts`).
+
+mock-crm served its eight requests from four replicas. Each replica keeps a steady offset between the platform's timestamp and the line's own `ts`, of -1.04, +1.12, -0.80 and +0.68 s. No replica started during the calls. The runtime logs show no `listening on :8080` line after 06:58 for mock-crm, 06:23 for voice-context and 00:07 for voice-tools. These replicas had run for hours without needing a secret, and their first keyed request paid for it.
+
+**Cause.** Each replica reads a secret on first use, which took 0.55 to over 1.0 s. mock-crm's replica also waits up to 1,000 ms for its three reads on its first keyed request (T20). A CRM call can meet two first uses in a row, the caller's `INTERNAL_KEY` read and mock-crm's read window, about 1.7 s together. The bounds were 1,000 ms for voice-context's secret read and 1,500 ms for both CRM calls. Requests spread over several replicas per function, so first uses keep coming long after a ship, not only after a quiet night.
+
+**Fix.** Card T22. voice-context and voice-tools start every read on a replica's first request of any kind, as mock-crm has since T20, and the CRM bounds cover two first uses in a row. Card T14 adds a warm-up script that Thiago runs before the review.
+
+**Design impact.** ADR-014's exception for reads extends to all three functions, and the budget table in `docs/ARCHITECTURE.md` changes with T22.
+
+## 18. The disclosure line played twice
+
+**Date** 13 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** Every call heard the disclosure line twice, on the phone and in the browser.
+
+**Evidence.**
+
+- T11 sets the assistant's `greeting` to the Disclosure node's line (`assistantBody` in `scripts/provision/desired.ts`). In S2 a speak start node replaced the greeting (S2 findings).
+- Only the speak node Disclosure runs before the tool node Route call, so the model has no turn in which to repeat the line.
+- On all four calls that got that far, Route call reached `/tools/disclosure` 15 to 17 s after `/dv` answered. The line has 25 words, about 8 s of speech, so that fits two plays and not one.
+
+**Cause.** Most likely the greeting now plays before the speak start node. In S2 the greeting had other words and never played. The transcripts in the portal's Conversation History would settle it.
+
+**Fix.** Card T23. Provisioning sends an empty greeting. The next call also tests the cause, since it should hear the line once and reach Route call about 8 s sooner.
+
+**Design impact.** T11's rule for `greeting` no longer holds.
+
+## 19. The disclosure tool never carried the call's session id
+
+**Date** 13 Oct 2026 · **Area** AI Assistants, webhook tools
+
+**Symptom.** All four `/tools/disclosure` requests answered `invalid_sid` with `logged: false`, so no session recorded its disclosure.
+
+**Evidence.**
+
+```text
+# telnyx-edge logs voice-context --type runtime, trimmed
+[2026-10-13T12:35:32.544Z] {"event":"disclosure","node":"route_call","outcome":"invalid_sid","logged":false,"status":200}
+```
+
+The route checks the Telnyx signature first and answers 403 when it fails (`functions/voice-context/src/routes/disclosure.ts`). All four answered 200, so Telnyx signed them.
+
+**Cause.** The tool node's model fills `session_id`, a body parameter of `log_disclosure`, from what it can see. In S2 the instructions named the variable. Since Thiago's decision of 12 October no instruction or message carries `session_id`, so the model had nothing to fill it with.
+
+**Fix.** Card T23. `log_disclosure` gets `session_id` as a preset body field, `{{session_id}}`. Telnyx fills presets from the dynamic variables and keeps them out of the model's view (https://developers.telnyx.com/docs/inference/ai-assistants/preset-webhook-parameters). Its body schema no longer asks the model for anything.
+
+**Design impact.** T11's shape for the disclosure tool changes. The unsigned path from T11's decision 7 is not needed, because Telnyx signs webhook tool requests.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
@@ -537,6 +609,34 @@ voice-tools, from its runtime log and the actor invocation records.
 **CRM timeouts.** voice-context's lookup and voice-tools' account fetch stay at 1,500 ms, decided by Thiago on 12 October. The reasoning is in `docs/ARCHITECTURE.md`, Call setup latency budget.
 
 **The actor log line.** T10's last acceptance item looked for the actor's line in `telnyx-edge logs voice-tools`. It is in `telnyx-edge actors logs Session` and `CustomerAccount` instead, and the platform redacts the trace id's hex (issue 16).
+
+**After T20.** Thiago shipped all three functions again on the evening of 12 October. All 11 smoke checks passed, and the MCP Inspector verified Marie's fixture account. The terminal output was lost in a restart, so the numbers come from the platform logs between 19:32 and 19:57 UTC and the health answers in `~/code/scratch/t10/run-195613/`.
+
+- **mock-crm's deploy.** It started 13 containers and stopped 13 between 19:36:53 and 19:37:31.
+- **The probe and the first keyed lookup.** The platform's probe at 19:37:31 was the first request of the replica it reached and started its reads. The first keyed lookup at 19:37:38 took 675 ms on the server, with the secrets already read and 670 ms of waiting for the flags. The next lookups took 0 to 2 ms.
+- **The flags reads.** Every `flags_read` line has `ok`, at 1,198 to 1,425 ms.
+- **voice-context's ten health calls.**
+
+| Check | First call | The nine after it |
+|---|---|---|
+| KV put, then get of the same key | 2,834 ms | 2,542 to 3,293 ms, no failure |
+| CRM lookup | 92 ms | 8 to 13 ms |
+| `CustomerAccount.snapshot` | 95 ms | 8 to 11 ms |
+| `Session.get` | 93 ms | 9 to 10 ms |
+
+T20's acceptance holds. The first keyed lookup stayed under 1,000 ms, the flags apply, and no CRM check came near a second.
+
+## T11 first calls, 13 October
+
+Thiago ran `node scripts/provision.ts --dry-run`, then the real run, at 03:29 and 03:30 Brussels time. The real run created the three shared tools, the MCP server and the assistant, moved the number to the assistant's TeXML application and wrote `infra/ids.json`. The second run, which should print `unchanged` throughout, comes with T23's changes. His first calls came at 14:35 to 14:46 Brussels time. Claude Code read the logs with read-only commands. Issues 17 to 19 hold the bugs, and these are the other answers.
+
+- **The trace id survives.** A real call's `trace_id` is its call control id, such as `v3:lhTGKCD0…`. It appears in full in voice-context's and voice-tools' runtime lines and in the `Session` and `CustomerAccount` actor lines, so a call's lines join by trace id. The platform still redacts the 32-hex sid (issue 16).
+- **Telnyx signs webhook tool requests.** All four `/tools/disclosure` requests passed the signature check that `/dv` uses (issue 19).
+- **Prompt nodes reach the MCP tools without a tool field.** `verify_account` came from Verify account and `run_line_diagnostics` from Diagnose (ADR-020).
+- **Telnyx opens the MCP session twice per call.** It sends `initialize`, `notifications/initialized` and `tools/list` within about 2 s of `/dv`, and again 20 to 25 s later, as the call reaches its first prompt node. Each request reads the session with one `Session.get`.
+- **The browser test call counts as a phone call.** It arrived with channel `phone_call` and a caller of fewer than six digits, so `/dv` looked those digits up. mock-crm answered 404, and voice-context cached a "not found" for them. T22 skips the lookup below eight digits and logs the channel.
+- **Thiago's log commands at 14:46 printed nothing** for voice-context and voice-tools. His capture at 14:49 and Claude Code's `telnyx-edge logs <name> --type runtime` at 15:03, with the defaults of `--since 1h` and `--last 50`, show every line. This was not reproduced. `--tail` prints only lines that arrive after it starts, and the runbook's helpers keep only their own events, so either would print nothing for these calls.
+- **His two calls from his phone recorded two calls on DV-100001.** A third within 24 hours makes him a repeat caller (path D). T15's reset clears this before the review.
 
 ## S2 findings
 

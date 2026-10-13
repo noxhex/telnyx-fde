@@ -1,6 +1,6 @@
 # Task cards
 
-Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T12 and T18 to T20 are written in full. Cards T13 to T17 are outlines in [later.md](later.md), detailed once the spikes have answered their questions.
+Each card is a self-contained prompt for a coding agent. It names the goal, the files to touch, the interface, the behaviour and the checks that define done. Spikes (S1 to S4) prove platform assumptions before we build on them. Cards T01 to T15 and T18 to T23 are written in full. Cards T16 and T17 are outlines in [later.md](later.md).
 
 ## The loop for one card
 
@@ -71,10 +71,13 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
 | T12 | Workflow content | T19 | done |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, script accepted, Thiago provisions and makes the first calls |
-| T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | in progress, code accepted, all three functions to ship |
-| T13 | End-to-end path tests | T12 | outline |
-| T14 | Canary actor and alert | T10 | outline |
-| T15 | Demo tooling (flags, simulated reports) | T10 | outline |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged second run comes with T23 |
+| T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
+| T22 | Calls that survive a replica's first use | T20 | ready |
+| T23 | The disclosure line once, and the disclosure tool's session id | T11 | ready |
+| T15 | Demo tooling: flags, simulated outage reports and a reset | T22 | ready |
+| T14 | A warm-up before the review | T22 | ready |
+| T21 | Fictional phone numbers in the tests | T11, last in the batch | ready |
+| T13 | Path tests and the rehearsal | T14, T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13, T14 | outline |

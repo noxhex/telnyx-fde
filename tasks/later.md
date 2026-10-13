@@ -1,32 +1,10 @@
-# Cards T13 to T17 (outlines)
+# Cards T16 and T17 (outlines)
 
 These get written in full once the spikes have answered their questions, because their details depend on what S2, S3 and S4 find. Each outline already names the goal and what done looks like. `telnyx-edge dev` has no secrets, environment variables or KV namespace (DEBUGLOG issue 9), so anything keyed is checked against the deployed functions.
 
-## T13. End-to-end path tests
+## T13 to T15
 
-**Goal.** Call every path in `docs/WORKFLOW.md` (A to K) at least once, and record the trace id, the nodes the transcript shows, and the matching log lines in `docs/TEST-PLAN.md`.
-
-Path G, the time guard, is tested by phone, because browser test calls never fire a time-based edge (S2). A call with the mock-crm flag `crm_fail` set shows how Telnyx treats a tool result with `isError: true`, which every failing dependency and every invalid argument now returns (T19). That matters because S4 saw Telnyx crash a call on an MCP failure its docs said the call would survive (DEBUGLOG issue 13), so the transcript and the call's end state go into the evidence. `verify_account` and `check_area_status` take a postcode or an account number sent as a JSON number (T10 follow-up of 12 October), so a call where the model sends one still verifies, and the transcripts show how often it happens. Before the first call, check that every variable edge in the provisioned workflow has its value type set explicitly, String for `"true"` and `"false"` and Number for the duration, since a Boolean `true` never matches the string a variable holds. Actor lines are in `telnyx-edge actors logs <Type>`, and the platform may redact trace ids in runtime logs (DEBUGLOG issue 16), so each call's evidence also names its time window.
-
-**Done when** every path has a passing call with evidence, or a bug entry in `DEBUGLOG.md` and a fix.
-
-## T14. Canary actor and alert
-
-**Goal.** A `Canary` actor in `voice-tools` whose alarm runs every 30 seconds. It calls `voice-context /internal/health` (which includes a real CRM lookup), creates a canary session through `POST /internal/sessions`, and runs MCP `initialize` and `tools/list` with it. It writes the run to `canary/last` with per-check latency, and after two consecutive failures sends a push notification through ntfy (topic in the secret `NTFY_TOPIC`), then one more on recovery. `POST /internal/canary/start` arms it. The health check's KV probe timed out on 2 of 22 calls in T10, about one call in ten (DEBUGLOG, T10 measurements), so the canary alerts only on consecutive failures, never on a single one.
-
-**Done when**, against the deployed functions, setting the flag `crm_fail` to true triggers a push within about a minute, and clearing it triggers the recovery message. The README section "How we would know it is broken" describes exactly this.
-
-## T15. Demo tooling
-
-**Goal.** Scripts that make the demo repeatable.
-- `scripts/flags.ts get|set <name> <value>` edits `flags/global`.
-- `scripts/simulate-reports.ts <postcode> <count>` creates sessions for fixture accounts through `/internal/sessions` and calls `report_outage` over MCP.
-- `scripts/resolve-area.ts <postcode>` calls a new internal route that resolves an `AreaIncident`.
-- `scripts/tail.sh` tails all three functions' logs and the three actor types' logs (`telnyx-edge actors logs <Type> --tail`) with useful `jq` filters.
-
-After the report that crosses the threshold, the script waits about 15 seconds before the next call, because the alarm publishes the new status a few seconds later and warm containers keep area statuses in memory for 10 seconds (ADR-005, ADR-019).
-
-**Done when** the threshold-crossing demo (path I) runs end to end from these scripts against the deployed functions.
+Written in full on 13 October, after the first calls. [T13](T13-path-tests.md) covers the path tests and the rehearsal, [T14](T14-warm-up.md) shrank to a warm-up script, and [T15](T15-demo-tooling.md) covers the flags, the simulated outage reports and a reset of the demo state. The canary actor from T14's outline goes into the README as the next step. It runs every 30 seconds, checks voice-context's health, a canary session and MCP `initialize` and `tools/list`, and alerts through ntfy after two consecutive failures, since the health check's KV probe times out about one call in ten.
 
 ## T16. Stretch goals
 
