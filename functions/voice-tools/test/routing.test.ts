@@ -50,6 +50,24 @@ describe("matchRoute", () => {
     expect(matchRoute("GET", "/")).toBe("not_found");
     expect(matchRoute("GET", "/nope")).toBe("not_found");
   });
+
+  it("matches the demo tooling routes (T15)", () => {
+    expect(matchRoute("GET", "/internal/demo/flags")).toBe("internal_demo_flags_get");
+    expect(matchRoute("PUT", "/internal/demo/flags")).toBe("internal_demo_flags_put");
+    expect(matchRoute("POST", "/internal/demo/reports")).toBe("internal_demo_reports");
+    expect(matchRoute("POST", "/internal/demo/reset")).toBe("internal_demo_reset");
+  });
+
+  it("another method on a demo path is not_found, so it answers 404 before any access", () => {
+    expect(matchRoute("POST", "/internal/demo/flags")).toBe("not_found");
+    expect(matchRoute("DELETE", "/internal/demo/flags")).toBe("not_found");
+    expect(matchRoute("GET", "/internal/demo/reports")).toBe("not_found");
+    expect(matchRoute("PUT", "/internal/demo/reports")).toBe("not_found");
+    expect(matchRoute("GET", "/internal/demo/reset")).toBe("not_found");
+    expect(matchRoute("DELETE", "/internal/demo/reset")).toBe("not_found");
+    expect(matchRoute("GET", "/internal/demo")).toBe("not_found");
+    expect(matchRoute("GET", "/internal/demo/flags/x")).toBe("not_found");
+  });
 });
 
 describe("fetch routing", () => {
@@ -114,6 +132,34 @@ describe("fetch routing", () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthorized" });
     expect(actorCalls).toEqual([]);
+  });
+
+  it("a wrong method on a demo path answers 404 without any state access", async () => {
+    const { env, actorCalls } = makeTrackedEnv();
+    const res = await handler.fetch(new Request("http://x.test/internal/demo/flags", { method: "POST" }), env);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not_found" });
+    expect(actorCalls).toEqual([]);
+  });
+
+  it("POST /internal/demo/reset without a key answers 401 and makes no actor call (dev fails closed)", async () => {
+    const { env, actorCalls } = makeTrackedEnv();
+    const res = await handler.fetch(
+      new Request("http://x.test/internal/demo/reset", { method: "POST" }),
+      env,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+    expect(actorCalls).toEqual([]);
+  });
+
+  it("the demo routes write exactly one log line per request", async () => {
+    const { env } = makeTrackedEnv();
+    const lines = await captureLines(() =>
+      handler.fetch(new Request("http://x.test/internal/demo/reset", { method: "POST" }), env),
+    );
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ event: "auth_failed", status: 401 });
   });
 });
 

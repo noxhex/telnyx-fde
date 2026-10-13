@@ -8,11 +8,12 @@
  * change that set the current outbox (publish logging) and the deadline of
  * a due confirming write.
  *
- * Publishing (ADR-005's outbox, ADR-019): `report` and `resolve` never write
- * to KV — S1 measured a KV write at 1.1 to 1.8 s, far beyond any method's
- * budget. A method that sets the outbox saves it first — the decision is
- * durable before any KV write — sets the alarm to now and returns. The
- * alarm writes the outbox with a 5,000 ms budget (alarms have 15 minutes).
+ * Publishing (ADR-005's outbox, ADR-019): `report`, `resolve` and `reset`
+ * never write to KV — S1 measured a KV write at 1.1 to 1.8 s, far beyond
+ * any method's budget. A method that sets the outbox saves it first — the
+ * decision is durable before any KV write — sets the alarm to now and
+ * returns. The alarm writes the outbox with a 5,000 ms budget (alarms have
+ * 15 minutes).
  * A success is confirmed with `markPublished`; a failure is logged as
  * `publish_retry` and retried on the ladder, 5 s, then 15 s, then every
  * 60 s, until it lands. The ladder only moves forward: a failed publish
@@ -30,8 +31,8 @@
  * write clears the marker, and a failed confirming write is retried like
  * any publish.
  *
- * Logging: `report` and `resolve` write one `actor` line each with the
- * method, trace id, area, outcome and latency; each KV write writes a
+ * Logging: `report`, `resolve` and `reset` write one `actor` line each with
+ * the method, trace id, area, outcome and latency; each KV write writes a
  * `publish` (or `publish_retry`) line carrying the trace id of the change
  * that set the outbox, including writes made by the alarm.
  */
@@ -48,12 +49,14 @@ import {
   markPublished,
   pruneReports,
   report as reportDomain,
+  reset as resetDomain,
   resolve as resolveDomain,
 } from "../domain/area-incident.js";
 import type {
   AreaIncidentState,
   AreaStatus,
   ReportResult,
+  ResetResult,
   ResolveResult,
   Symptom,
 } from "../domain/area-incident.js";
@@ -93,6 +96,11 @@ export interface AreaReportInput {
 }
 
 export interface AreaResolveInput {
+  nowMs: number;
+  traceId?: string;
+}
+
+export interface AreaResetInput {
   nowMs: number;
   traceId?: string;
 }
@@ -250,6 +258,32 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
       return result;
     } catch (error) {
       this._logCall({ method: "resolve", outcome: "error", timings, traceId: input.traceId, error });
+      throw error;
+    }
+  }
+
+  /**
+   * The demo reset (card T15): drop every report and any incident, back to
+   * `ok`. Unlike `resolve` this always saves — even on an area that was
+   * already `ok` — so the alarm always publishes a fresh status to
+   * `area/<postcode>/status`.
+   */
+  async reset(input: AreaResetInput): Promise<ResetResult> {
+    const timings = startTimings();
+    try {
+      const s = await timings.time("actor", () => this._load());
+      const { state, result } = resetDomain(s, { nowMs: input.nowMs });
+      await timings.time("actor", () => this._save(state));
+      const meta = await timings.time("actor", () => this._loadMeta());
+      meta.changeTraceId = input.traceId ?? null;
+      meta.lastStatus = state.outbox;
+      await timings.time("actor", () => this._saveMeta(meta));
+      // Never write to KV here: the alarm publishes it straight away.
+      await timings.time("actor", () => this.ctx.storage.setAlarm(Date.now()));
+      this._logCall({ method: "reset", outcome: "reset", timings, traceId: input.traceId });
+      return result;
+    } catch (error) {
+      this._logCall({ method: "reset", outcome: "error", timings, traceId: input.traceId, error });
       throw error;
     }
   }
@@ -415,9 +449,9 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
     });
   }
 
-  /** One `actor` line per `report`/`resolve` call; errors log before the rethrow. */
+  /** One `actor` line per `report`/`resolve`/`reset` call; errors log before the rethrow. */
   private _logCall(i: {
-    method: "report" | "resolve";
+    method: "report" | "resolve" | "reset";
     outcome: string;
     timings: Timings;
     traceId?: string;

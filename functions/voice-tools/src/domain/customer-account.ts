@@ -183,6 +183,16 @@ export function verify(
 }
 
 /**
+ * The demo reset (card T15): empty the 24-hour call window — and with it
+ * the repeat-caller count — and clear the verification failures and any
+ * lock. Tickets survive: a repeated demo must not lose the tickets earlier
+ * runs created on purpose.
+ */
+export function reset(s: CustomerAccountState): CustomerAccountState {
+  return { ...s, calls: [], verify: { failures: 0, lockedUntil: null } };
+}
+
+/**
  * Lift a lock whose time has come or passed. Only the lock is cleared: the
  * failure count is left alone. An unlocked account comes back untouched, so
  * running it twice is safe.

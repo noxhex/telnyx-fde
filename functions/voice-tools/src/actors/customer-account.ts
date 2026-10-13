@@ -26,6 +26,7 @@ import {
   createTicket,
   initialState,
   recordCall,
+  reset,
   verify,
 } from "../domain/customer-account.js";
 import type {
@@ -96,6 +97,24 @@ export class CustomerAccount extends StatefulActor {
       return result;
     } catch (error) {
       this._log("error", "createTicket", traceId, "error", timings);
+      throw error;
+    }
+  }
+
+  /**
+   * The demo reset (card T15): clear the call window, the verification
+   * failures and the lock, keep the tickets. A lock's alarm may still fire
+   * later; it finds no lock and does nothing, which `clearExpiredLock` on
+   * an unlocked account already is.
+   */
+  async reset(traceId?: string): Promise<void> {
+    const timings = startTimings();
+    try {
+      const s = await timings.time("actor", () => this._load());
+      await timings.time("actor", () => this._save(reset(s)));
+      this._log("info", "reset", traceId, "reset", timings);
+    } catch (error) {
+      this._log("error", "reset", traceId, "error", timings);
       throw error;
     }
   }

@@ -6,6 +6,7 @@ import {
   createTicket,
   initialState,
   recordCall,
+  reset,
   verify,
 } from "../src/domain/customer-account.js";
 import type { CustomerAccountState, TicketCategory } from "../src/domain/customer-account.js";
@@ -379,6 +380,46 @@ describe("clearExpiredLock", () => {
   });
 });
 
+// ---------- reset (T15) ----------
+
+describe("reset", () => {
+  it("an account with calls, failures, a lock and tickets keeps only its tickets", () => {
+    const s: CustomerAccountState = {
+      v: 1,
+      calls: [
+        { id: "call-1", at: 1000 },
+        { id: "call-2", at: 1001 },
+        { id: "call-3", at: 1002 },
+      ],
+      verify: { failures: 2, lockedUntil: 10_000 },
+      tickets: [
+        {
+          id: "T-0001",
+          dedupeKey: "call-1|repair_visit",
+          category: "repair_visit",
+          summary: "Fiber down",
+          createdAt: 1000,
+          window: "2026-10-12 08:00-12:00",
+        },
+      ],
+    };
+    const next = reset(s);
+    expect(next).toEqual({
+      v: 1,
+      calls: [],
+      verify: { failures: 0, lockedUntil: null },
+      tickets: s.tickets,
+    });
+    // The input is untouched.
+    expect(s.calls).toHaveLength(3);
+    expect(s.verify).toEqual({ failures: 2, lockedUntil: 10_000 });
+  });
+
+  it("round-trips a fresh account", () => {
+    expect(reset(initialState())).toEqual(initialState());
+  });
+});
+
 // ---------- createTicket ----------
 
 describe("createTicket", () => {
@@ -707,6 +748,55 @@ describe("CustomerAccount actor adapter", () => {
     const stored = await storage.get<CustomerAccountState>("state");
     expect(stored?.calls).toEqual([{ id: "call-1", at: 1000 }]);
   });
+
+  it("reset clears calls, failures and the lock, keeps tickets, and does not touch the alarm", async () => {
+    const seeded: CustomerAccountState = {
+      v: 1,
+      calls: [
+        { id: "call-1", at: 1000 },
+        { id: "call-2", at: 1001 },
+      ],
+      verify: { failures: 2, lockedUntil: null },
+      tickets: [
+        {
+          id: "T-0001",
+          dedupeKey: "call-1|repair_visit",
+          category: "repair_visit",
+          summary: "Fiber down",
+          createdAt: 1000,
+          window: "2026-10-12 08:00-12:00",
+        },
+      ],
+    };
+    const storage = await seed(seeded);
+    const actor = new CustomerAccount({ storage } as never, {} as never);
+    await actor.reset("trace-1");
+    const stored = await storage.get<CustomerAccountState>("state");
+    expect(stored).toEqual({
+      v: 1,
+      calls: [],
+      verify: { failures: 0, lockedUntil: null },
+      tickets: seeded.tickets,
+    });
+    // No alarm is scheduled on an unlocked account; a lock's alarm may still
+    // fire later and finds nothing to do.
+    expect(await storage.getAlarm()).toBeNull();
+  });
+
+  it("a later alarm after a reset finds no lock and changes nothing", async () => {
+    const seeded: CustomerAccountState = {
+      ...initialState(),
+      verify: { failures: 0, lockedUntil: 0 },
+    };
+    const storage = await seed(seeded);
+    const actor = new CustomerAccount({ storage } as never, {} as never);
+    await actor.reset("trace-1");
+    storage.reset();
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    expect(storage.calls.filter((c) => c.method === "put")).toEqual([]);
+    const stored = await storage.get<CustomerAccountState>("state");
+    expect(stored).toEqual(initialState());
+  });
 });
 
 // ---------- actor logging ----------
@@ -810,6 +900,24 @@ describe("CustomerAccount logging", () => {
     ]);
     expectLatencyShape(lines()[0]);
     expectLatencyShape(lines()[1]);
+  });
+
+  it("reset writes one line with the trace id and the masked account", async () => {
+    const { actor, lines } = await wire();
+    await actor.reset("trace-4");
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]).toMatchObject({
+      level: "info",
+      svc: "voice-tools",
+      event: "actor",
+      actor: "CustomerAccount",
+      method: "reset",
+      trace_id: "trace-4",
+      account: "DV-…001",
+      outcome: "reset",
+    });
+    expectLatencyShape(lines()[0]);
+    expect(JSON.stringify(lines()[0])).not.toContain(ACCOUNT);
   });
 
   it("a method that throws logs one error line and rethrows", async () => {

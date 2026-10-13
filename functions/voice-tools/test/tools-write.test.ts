@@ -26,7 +26,7 @@ import { createCrmClient } from "../src/clients/crm.js";
 import type { CrmAccount, CrmClient, GetAccountOutcome } from "../src/clients/crm.js";
 import type { SessionsClient } from "../src/clients/sessions.js";
 import type { CreateTicketResult, VerifyInput, VerifyResult } from "../src/domain/customer-account.js";
-import type { ReportResult } from "../src/domain/area-incident.js";
+import type { ReportResult, ResetResult } from "../src/domain/area-incident.js";
 import { FLAG_CACHE_TTL_MS, TIMED_OUT } from "../src/config.js";
 import type { TimeoutRunner } from "../src/config.js";
 import type { CachesDep, SecretsDep, VoiceToolsDeps } from "../src/deps.js";
@@ -254,6 +254,10 @@ class AccountsStub implements AccountsClient {
       ? this.heldTicket.promise
       : Promise.resolve(this.ticketResult);
   }
+
+  reset(): Promise<void> {
+    return Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.reset"));
+  }
 }
 
 class AreasStub implements AreasClient {
@@ -278,6 +282,10 @@ class AreasStub implements AreasClient {
       return Promise.reject(this.failReport);
     }
     return Promise.resolve(this.reportResult);
+  }
+
+  reset(): Promise<ResetResult> {
+    return Promise.reject(new Error("unexpected AREA_INCIDENT.reset"));
   }
 }
 

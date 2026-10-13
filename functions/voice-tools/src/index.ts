@@ -1,8 +1,10 @@
 /**
  * voice-tools — the MCP server the assistant calls during a conversation
  * (`POST /mcp`, ADR-009), the internal session issuer (`POST
- * /internal/sessions`, for MCP Inspector, the canary and the demo scripts)
- * and liveness (`GET /healthz`). Routing only: strict method+path matching,
+ * /internal/sessions`, for MCP Inspector, the canary and the demo scripts),
+ * the internal demo tooling (`/internal/demo/*`, T15: feature flags,
+ * simulated outage reports and the demo reset) and liveness
+ * (`GET /healthz`). Routing only: strict method+path matching,
  * and anything unknown is a 404 before any KV or actor access (ADR-014,
  * DEBUGLOG issue 4).
  *
@@ -63,6 +65,12 @@ import {
   SERVICE_NAME,
 } from "./config.js";
 import type { CachesDep, SecretsDep, VoiceToolsDeps } from "./deps.js";
+import {
+  handleDemoFlagsGet,
+  handleDemoFlagsPut,
+  handleDemoReports,
+  handleDemoReset,
+} from "./routes/internal-demo.js";
 import { handleInternalSessions } from "./routes/internal-sessions.js";
 import { handleMcp } from "./routes/mcp.js";
 
@@ -79,6 +87,10 @@ export type RouteName =
   | "mcp"
   | "mcp_wrong_method"
   | "internal_sessions"
+  | "internal_demo_flags_get"
+  | "internal_demo_flags_put"
+  | "internal_demo_reports"
+  | "internal_demo_reset"
   | "healthz"
   | "not_found";
 
@@ -95,6 +107,21 @@ export function matchRoute(method: string, pathname: string): RouteName {
   }
   if (method === "POST" && pathname === "/internal/sessions") {
     return "internal_sessions";
+  }
+  if (pathname === "/internal/demo/flags") {
+    if (method === "GET") {
+      return "internal_demo_flags_get";
+    }
+    if (method === "PUT") {
+      return "internal_demo_flags_put";
+    }
+    return "not_found";
+  }
+  if (method === "POST" && pathname === "/internal/demo/reports") {
+    return "internal_demo_reports";
+  }
+  if (method === "POST" && pathname === "/internal/demo/reset") {
+    return "internal_demo_reset";
   }
   if (method === "GET" && pathname === "/healthz") {
     return "healthz";
@@ -337,6 +364,14 @@ export async function handleRequest(
     }
     case "internal_sessions":
       return handleInternalSessions(req, buildDeps(env, box));
+    case "internal_demo_flags_get":
+      return handleDemoFlagsGet(req, buildDeps(env, box));
+    case "internal_demo_flags_put":
+      return handleDemoFlagsPut(req, buildDeps(env, box));
+    case "internal_demo_reports":
+      return handleDemoReports(req, buildDeps(env, box));
+    case "internal_demo_reset":
+      return handleDemoReset(req, buildDeps(env, box));
     case "not_found": {
       const timings = startTimings();
       const status = 404;

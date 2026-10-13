@@ -13,6 +13,7 @@ import {
   markPublished,
   pruneReports,
   report,
+  reset,
   resolve,
 } from "../src/domain/area-incident.js";
 import type {
@@ -325,6 +326,56 @@ describe("resolve", () => {
     }
     expect(s.version).toBe(3);
     expect(s.outbox?.version).toBe(3);
+  });
+});
+
+// ---------- reset (T15) ----------
+
+describe("reset", () => {
+  it("from outage: clears reports and incident, sets ok, raises the version and fills the outbox", () => {
+    const s = feed(["DV-100001", "DV-100002", "DV-100003"]).state;
+    const { state, result } = reset(s, { nowMs: T0 + HOUR_MS });
+    expect(result).toEqual({ version: 2 });
+    expect(state.status).toBe("ok");
+    expect(state.reports).toEqual({});
+    expect(state.incident).toBeNull();
+    expect(state.version).toBe(2);
+    expect(state.outbox).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 2,
+      updatedAt: T0 + HOUR_MS,
+    });
+  });
+
+  it("from ok with reports: clears them and still raises the version and fills the outbox", () => {
+    const s = report(initialState("8630"), reportInput()).state;
+    expect(s.version).toBe(0); // the declaration never happened
+    const { state, result } = reset(s, { nowMs: T0 + HOUR_MS });
+    expect(result).toEqual({ version: 1 });
+    expect(state.status).toBe("ok");
+    expect(state.reports).toEqual({});
+    expect(state.version).toBe(1);
+    expect(state.outbox).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 1,
+      updatedAt: T0 + HOUR_MS,
+    });
+  });
+
+  it("unlike resolve, it is not a no-op on a fresh area", () => {
+    const s = initialState("8630");
+    const { state } = reset(s, { nowMs: T0 });
+    expect(state).not.toBe(s);
+    expect(state.version).toBe(1);
+    expect(state.outbox?.state).toBe("ok");
+  });
+
+  it.each([NaN, Infinity, -Infinity])("throws for nowMs = %s", (bad) => {
+    expect(() => reset(initialState("8630"), { nowMs: bad })).toThrow(RangeError);
   });
 });
 
@@ -879,6 +930,75 @@ describe("AreaIncident actor adapter", () => {
     expect(result).toEqual({ resolved: false, incidentId: null });
     expect(storage.calls.filter((c) => c.method === "put")).toEqual([]);
     expect(kv.calls).toEqual([]);
+  });
+
+  it("reset saves, sets the alarm to now, and the alarm publishes the ok status to KV", async () => {
+    const clock = createClockFake(T0);
+    const kv = createKvFake(clock.now);
+    const { actor, storage } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 1 }));
+    await actor.alarm({ retryCount: 0, isRetry: false }); // v1 outage published
+    vi.setSystemTime(T0 + HOUR_MS);
+    kv.reset();
+    const result = await actor.reset({ nowMs: T0 + HOUR_MS, traceId: "t9" });
+    expect(result).toEqual({ version: 2 });
+    // No KV call from the method itself: the alarm publishes it.
+    expect(kv.calls).toEqual([]);
+    expect(await storage.getAlarm()).toBe(T0 + HOUR_MS); // now
+    const meta = await storedMeta(storage);
+    expect(meta.changeTraceId).toBe("t9");
+    expect(meta.lastStatus).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 2,
+      updatedAt: T0 + HOUR_MS,
+    });
+    await actor.alarm({ retryCount: 0, isRetry: false }); // v2 published
+    const published = await kv.get<AreaStatus>("area/8630/status", { type: "json" });
+    expect(published).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 2,
+      updatedAt: T0 + HOUR_MS,
+    });
+    const s = await storedState(storage);
+    expect(s).toMatchObject({ status: "ok", reports: {}, incident: null, outbox: null, version: 2 });
+  });
+
+  it("reset on a fresh area still publishes a fresh ok status (unlike resolve)", async () => {
+    const clock = createClockFake(T0);
+    const kv = createKvFake(clock.now);
+    const { actor, storage } = makeActor(kv);
+    const result = await actor.reset({ nowMs: T0, traceId: "t9" });
+    expect(result).toEqual({ version: 1 });
+    expect(await storage.getAlarm()).toBe(T0); // now
+    await actor.alarm({ retryCount: 0, isRetry: false });
+    const published = await kv.get<AreaStatus>("area/8630/status", { type: "json" });
+    expect(published).toEqual({
+      state: "ok",
+      incidentId: null,
+      eta: null,
+      version: 1,
+      updatedAt: T0,
+    });
+  });
+
+  it("reset writes one actor line with the outcome, the area and the trace id", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.reset({ nowMs: T0, traceId: "trace-9" });
+    const line = logged("actor")[0];
+    expect(line).toMatchObject({
+      method: "reset",
+      trace_id: "trace-9",
+      area: "8630",
+      outcome: "reset",
+      latency_ms: { total: 0, actor: 0 },
+    });
+    expect("account" in line).toBe(false);
   });
 
   // ---------- actor call logging ----------

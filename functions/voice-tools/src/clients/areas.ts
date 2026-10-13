@@ -13,16 +13,19 @@
 
 import type { ActorNamespace } from "@telnyx/edge-runtime";
 
-import type { ReportResult } from "../domain/area-incident.js";
-import type { AreaReportInput } from "../actors/area-incident.js";
+import type { ReportResult, ResetResult } from "../domain/area-incident.js";
+import type { AreaReportInput, AreaResetInput } from "../actors/area-incident.js";
 
 export interface AreasClient {
   /** Record one outage report on the postcode's actor; no KV write happens on this path (ADR-005). */
   report(postcode: string, input: AreaReportInput): Promise<ReportResult>;
+  /** The demo reset (T15): drop every report and any incident; the alarm publishes the fresh `ok` status. */
+  reset(postcode: string, input: AreaResetInput): Promise<ResetResult>;
 }
 
 interface AreaIncidentRpc {
   report(input: AreaReportInput): Promise<ReportResult>;
+  reset(input: AreaResetInput): Promise<ResetResult>;
 }
 
 export function createAreasClient(namespace: ActorNamespace): AreasClient {
@@ -31,6 +34,9 @@ export function createAreasClient(namespace: ActorNamespace): AreasClient {
   return {
     report(postcode, input) {
       return stubFor(postcode).report(input);
+    },
+    reset(postcode, input) {
+      return stubFor(postcode).reset(input);
     },
   };
 }

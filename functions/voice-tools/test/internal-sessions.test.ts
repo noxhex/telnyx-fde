@@ -170,10 +170,12 @@ class SessionsStub implements SessionsClient {
 const accountsNever: AccountsClient = {
   verify: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.verify")),
   createTicket: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.createTicket")),
+  reset: () => Promise.reject(new Error("unexpected CUSTOMER_ACCOUNT.reset")),
 };
 
 const areasNever: AreasClient = {
   report: () => Promise.reject(new Error("unexpected AREA_INCIDENT.report")),
+  reset: () => Promise.reject(new Error("unexpected AREA_INCIDENT.reset")),
 };
 
 class SecretsStub implements SecretsDep {

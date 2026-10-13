@@ -63,6 +63,10 @@ export interface ResolveResult {
   incidentId: string | null;
 }
 
+export interface ResetResult {
+  version: number;
+}
+
 export function initialState(areaCode: string): AreaIncidentState {
   return {
     v: 1,
@@ -216,6 +220,30 @@ export function resolve(
     outbox: { state: "ok", incidentId: null, eta: null, version, updatedAt: i.nowMs },
   };
   return { state, result: { resolved: true, incidentId: s.incident?.id ?? null } };
+}
+
+/**
+ * The demo reset (card T15): drop every report and any incident and set the
+ * status back to `ok`. Unlike `resolve`, this also runs on an area that is
+ * already `ok`: the version always goes up by one and the outbox always
+ * holds the fresh `ok` status, so the actor's alarm always publishes one to
+ * KV — even for an area that never had anything to clear.
+ */
+export function reset(
+  s: AreaIncidentState,
+  i: { nowMs: number },
+): { state: AreaIncidentState; result: ResetResult } {
+  requireFiniteMs("reset", "nowMs", i.nowMs);
+  const version = s.version + 1;
+  const state: AreaIncidentState = {
+    ...s,
+    status: "ok",
+    reports: {},
+    incident: null,
+    version,
+    outbox: { state: "ok", incidentId: null, eta: null, version, updatedAt: i.nowMs },
+  };
+  return { state, result: { version } };
 }
 
 /**

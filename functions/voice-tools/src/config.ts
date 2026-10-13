@@ -44,6 +44,16 @@ export const TIMEOUTS = {
    * cold replica (T20), about 1.7 s together (DEBUGLOG issue 17).
    */
   crmAccountMs: 2_500,
+  /**
+   * One KV read or write on the internal demo routes (T15): a KV write and
+   * a read together took up to 3.3 s in the health checks after the T20
+   * ship.
+   */
+  demoKvMs: 5_000,
+  /** One simulated `AREA_INCIDENT.report` on the demo routes (T15); ten of them in a row stay well inside the platform's 30 s limit. */
+  demoReportMs: 2_000,
+  /** One reset actor call on the demo routes (T15); the thirteen run in parallel under the same limit. */
+  demoResetMs: 2_000,
 } as const;
 
 /** The per-container memory-cache lifetime for area statuses (ADR-019). */

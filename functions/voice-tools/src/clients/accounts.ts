@@ -28,11 +28,14 @@ export interface AccountsClient {
     input: NewTicketInput,
     traceId: string,
   ): Promise<CreateTicketResult>;
+  /** The demo reset (T15): clear calls, verification failures and the lock; tickets survive. */
+  reset(accountNumber: string, traceId: string): Promise<void>;
 }
 
 interface CustomerAccountRpc {
   verify(input: VerifyInput, traceId?: string): Promise<VerifyResult>;
   createTicket(input: NewTicketInput, traceId?: string): Promise<CreateTicketResult>;
+  reset(traceId?: string): Promise<void>;
 }
 
 export function createAccountsClient(namespace: ActorNamespace): AccountsClient {
@@ -44,6 +47,9 @@ export function createAccountsClient(namespace: ActorNamespace): AccountsClient 
     },
     createTicket(accountNumber, input, traceId) {
       return stubFor(accountNumber).createTicket(input, traceId);
+    },
+    reset(accountNumber, traceId) {
+      return stubFor(accountNumber).reset(traceId);
     },
   };
 }
