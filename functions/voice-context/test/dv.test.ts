@@ -312,6 +312,10 @@ interface Harness {
     options?: { staleTimestamp?: boolean; unsigned?: boolean },
   ): Promise<{ status: number; body: Record<string, unknown> }>;
   lastLog(): Record<string, unknown>;
+  /** The last `dv` line — a fire-and-forget `crm_cache_write` line can follow it (T24). */
+  dvLog(): Record<string, unknown>;
+  /** Every parsed line with the given event, in order. */
+  eventLines(event: string): Record<string, unknown>[];
 }
 
 interface HarnessSeed {
@@ -423,6 +427,20 @@ function makeHarness(seed: HarnessSeed = {}): Harness {
         throw new Error("no log lines captured");
       }
       return JSON.parse(lines[lines.length - 1] as string) as Record<string, unknown>;
+    },
+    dvLog() {
+      const dvLines = lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.event === "dv");
+      if (dvLines.length === 0) {
+        throw new Error("no dv log line captured");
+      }
+      return dvLines[dvLines.length - 1] as Record<string, unknown>;
+    },
+    eventLines(event: string) {
+      return lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((l) => l.event === event);
     },
   };
 }
@@ -574,7 +592,7 @@ describe("handleDv happy paths", () => {
       diagnostics_enabled: "true",
     });
 
-    const log = h.lastLog();
+    const log = h.dvLog();
     expect(log).toMatchObject({
       event: "dv",
       node: "init",
@@ -586,7 +604,7 @@ describe("handleDv happy paths", () => {
       area_outage: "false",
       repeat_caller: "false",
       cache: "miss",
-      cache_write: "ok",
+      cache_write: "started",
       outcome: "ok",
       reasons: [],
       status: 200,
@@ -703,12 +721,12 @@ describe("handleDv happy paths", () => {
     ]);
     const written = await h.kv.get(kvKeys.crmPhone(CALLER_DIGITS), { type: "json" });
     expect(written).toEqual({ notFound: true });
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       identity: "anonymous",
       outcome: "ok",
       reasons: [],
       cache: "miss",
-      cache_write: "ok",
+      cache_write: "started",
     });
   });
 
@@ -728,7 +746,7 @@ describe("handleDv happy paths", () => {
     // No CRM cache key was read or written for a caller that has no digits.
     const crmKeyOps = h.kv.calls.filter((c) => c.key?.startsWith("crm/"));
     expect(crmKeyOps).toEqual([]);
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       caller: null,
       cache: "miss",
       outcome: "ok",
@@ -743,12 +761,12 @@ describe("handleDv happy paths", () => {
       makeDvBody({ telnyx_conversation_channel: long }),
     );
     expect(status).toBe(200);
-    expect(h.lastLog().channel).toBe(long.slice(0, 32));
-    expect((h.lastLog().channel as string).length).toBe(32);
+    expect(h.dvLog().channel).toBe(long.slice(0, 32));
+    expect((h.dvLog().channel as string).length).toBe(32);
 
     const second = makeHarness();
     await second.call(makeDvBody());
-    expect(second.lastLog().channel).toBe("phone_call");
+    expect(second.dvLog().channel).toBe("phone_call");
   });
 
   it("a caller with fewer than eight digits gets no lookup and no crm/phone key, anonymous like no phone (T22)", async () => {
@@ -777,7 +795,7 @@ describe("handleDv happy paths", () => {
         nowMs: T0,
       },
     });
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       identity: "anonymous",
       outcome: "ok",
       reasons: [],
@@ -801,7 +819,7 @@ describe("handleDv happy paths", () => {
     h.accounts.defaultResult = { repeatCaller: true };
     const { body } = await h.call(makeDvBody());
     expect((body.dynamic_variables as Record<string, string>).repeat_caller).toBe("true");
-    expect(h.lastLog().repeat_caller).toBe("true");
+    expect(h.dvLog().repeat_caller).toBe("true");
   });
 
   it("gives every dependency call the card's own timeout", async () => {
@@ -809,15 +827,15 @@ describe("handleDv happy paths", () => {
     h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
     await h.call(makeDvBody());
     expect(h.timers.entries.map((e) => e.ms)).toEqual([
-      1_000, // TELNYX_PUBLIC_KEY
+      2_000, // TELNYX_PUBLIC_KEY (T24: first, so it always fits the budget)
       1_000, // flags/global
-      1_000, // MCP_TOKEN_KEY
-      1_000, // MCP_ENC_KEY
+      2_000, // MCP_TOKEN_KEY (T24: 2,000 ms, cut to what remains of the budget)
+      2_000, // MCP_ENC_KEY
       2_000, // the CRM lookup race (T22: covers the key read and a cold mock-crm)
-      2_000, 2_000, 2_000, 2_000, 2_000, // the five area statuses (T22)
+      2_500, 2_500, 2_500, 2_500, 2_500, // the five area statuses (T24)
       600, // recordCall
       1_000, // SESSION.create
-      2_500, // the CRM cache write
+      2_500, // the CRM cache write (T24: never awaited, never cut)
     ]);
   });
 });
@@ -840,7 +858,7 @@ describe("handleDv degraded CRM", () => {
       identity_level: "anonymous",
       greeting_line: "Hello",
     });
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["crm_timeout"],
       cache: "miss",
@@ -869,7 +887,7 @@ describe("handleDv degraded CRM", () => {
     const { status, body } = await h.call(makeDvBody());
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).identity_level).toBe("anonymous");
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["crm_error"],
       cache: "miss",
@@ -888,8 +906,8 @@ describe("handleDv degraded CRM", () => {
     expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
     expect(h.accounts.recordCalls).toHaveLength(1);
     expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
-    expect(h.lastLog()).toMatchObject({ cache: "kv", outcome: "ok", reasons: [] });
-    expect(h.lastLog()).not.toHaveProperty("cache_write");
+    expect(h.dvLog()).toMatchObject({ cache: "kv", outcome: "ok", reasons: [] });
+    expect(h.dvLog()).not.toHaveProperty("cache_write");
 
     // The pending mock-crm call can settle later without changing anything.
     heldCrm.resolve({ ok: false });
@@ -920,7 +938,7 @@ describe("handleDv degraded CRM", () => {
     const { status, body } = await pending;
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
-    expect(h.lastLog()).toMatchObject({ cache: "kv", outcome: "ok", reasons: [] });
+    expect(h.dvLog()).toMatchObject({ cache: "kv", outcome: "ok", reasons: [] });
   });
 
   it("a KV miss waits for mock-crm, then writes the KV cache", async () => {
@@ -945,7 +963,7 @@ describe("handleDv degraded CRM", () => {
         options: { expirationTtl: 600 },
       },
     ]);
-    expect(h.lastLog()).toMatchObject({ cache: "miss", cache_write: "ok" });
+    expect(h.dvLog()).toMatchObject({ cache: "miss", cache_write: "started" });
   });
 });
 
@@ -987,9 +1005,9 @@ describe("handleDv: the key read counts against the lookup's own bound (T22)", (
     // read was cut at 1,000 ms and this exact scenario was `crm_error`
     // (DEBUGLOG issue 17, Thiago's call at 12:35).
     expect(h.timers.entries.map((e) => e.ms)).toEqual([
-      1_000, 1_000, 1_000, 1_000, // public key, flags, two token keys
+      2_000, 1_000, 2_000, 2_000, // public key, flags, two token keys (T24 bounds)
       2_000, // the lookup race: no separate 1,000 ms cut for INTERNAL_KEY
-      2_000, 2_000, 2_000, 2_000, 2_000, // the five area statuses
+      2_500, 2_500, 2_500, 2_500, 2_500, // the five area statuses (T24)
     ]);
 
     h.clock.advance(1_200);
@@ -1010,14 +1028,14 @@ describe("handleDv: the key read counts against the lookup's own bound (T22)", (
     expect(dynamic.first_name).toBe("Marie");
     expect(dynamic.identity_level).toBe("number_match");
     expect(h.timers.entries[4]?.fired).toBe(false);
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       identity: "number_match",
       outcome: "ok",
       reasons: [],
       cache: "miss",
-      cache_write: "ok",
+      cache_write: "started",
     });
-    const latency = h.lastLog().latency_ms as Record<string, unknown>;
+    const latency = h.dvLog().latency_ms as Record<string, unknown>;
     expect(latency.crm).toBe(1_800);
   });
 
@@ -1037,7 +1055,7 @@ describe("handleDv: the key read counts against the lookup's own bound (T22)", (
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
     expect(h.timers.entries[4]?.fired).toBe(false);
-    expect(h.lastLog()).toMatchObject({ outcome: "ok", reasons: [] });
+    expect(h.dvLog()).toMatchObject({ outcome: "ok", reasons: [] });
   });
 
   it("at 2,001 ms combined the race times out: anonymous with crm_timeout, and the late answer is absorbed", async () => {
@@ -1059,7 +1077,7 @@ describe("handleDv: the key read counts against the lookup's own bound (T22)", (
       caller_known: "false",
       identity_level: "anonymous",
     });
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["crm_timeout"],
       cache: "miss",
@@ -1084,7 +1102,7 @@ describe("handleDv degraded actors and sessions", () => {
     const { status, body } = await h.call(makeDvBody());
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).repeat_caller).toBe("false");
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["actor_error"],
       repeat_caller: "false",
@@ -1107,7 +1125,7 @@ describe("handleDv degraded actors and sessions", () => {
     const { status, body } = await pending;
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).repeat_caller).toBe("false");
-    expect(h.lastLog()).toMatchObject({ outcome: "degraded", reasons: ["actor_timeout"] });
+    expect(h.dvLog()).toMatchObject({ outcome: "degraded", reasons: ["actor_timeout"] });
 
     held.resolve({ repeatCaller: true });
     await tick();
@@ -1123,7 +1141,7 @@ describe("handleDv degraded actors and sessions", () => {
       session_ok: "true",
       identity_level: "anonymous",
     });
-    expect(h.lastLog()).toMatchObject({ outcome: "degraded", reasons: ["session_error"] });
+    expect(h.dvLog()).toMatchObject({ outcome: "degraded", reasons: ["session_error"] });
   });
 
   it("a SESSION.create timeout still answers 200, degraded, with session_timeout", async () => {
@@ -1139,7 +1157,7 @@ describe("handleDv degraded actors and sessions", () => {
     const { status, body } = await pending;
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).session_ok).toBe("true");
-    expect(h.lastLog()).toMatchObject({ outcome: "degraded", reasons: ["session_timeout"] });
+    expect(h.dvLog()).toMatchObject({ outcome: "degraded", reasons: ["session_timeout"] });
     heldCreate.reject(new Error("late failure"));
     await tick();
     expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
@@ -1156,7 +1174,7 @@ describe("handleDv secrets and forced error", () => {
     expect(h.accounts.recordCalls).toEqual([]);
     expect(h.sessions.creates).toEqual([]);
     expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
-    expect(h.lastLog()).toMatchObject({ outcome: "error", reasons: ["secret_error"], status: 500 });
+    expect(h.dvLog()).toMatchObject({ outcome: "error", reasons: ["secret_error"], status: 500 });
   });
 
   it("a missing MCP_ENC_KEY answers 500 with no actor call", async () => {
@@ -1173,7 +1191,7 @@ describe("handleDv secrets and forced error", () => {
     const pending = h.call(makeDvBody());
     await tick();
     // Entries 2 and 3 are the two token key reads; entry 2 (MCP_TOKEN_KEY) is pending.
-    expect(h.timers.entries[2]?.ms).toBe(1_000);
+    expect(h.timers.entries[2]?.ms).toBe(2_000);
     h.timers.entries[2]?.fire();
     const { status, body } = await pending;
     expect(status).toBe(500);
@@ -1191,12 +1209,13 @@ describe("handleDv secrets and forced error", () => {
     expect(h.secrets.reads.filter((r) => r === "MCP_TOKEN_KEY")).toHaveLength(1);
   });
 
-  it("a public key read that never settles fails the signature check 403 no_key", async () => {
+  it("a public key read still pending at the 2,000 ms bound fails the signature check 403 no_key; the late settlement changes nothing", async () => {
     const h = makeHarness();
     const heldRead = h.secrets.hold("TELNYX_PUBLIC_KEY");
     const pending = h.call(makeDvBody());
     await tick();
-    expect(h.timers.entries[0]?.ms).toBe(1_000);
+    expect(h.timers.entries[0]?.ms).toBe(2_000);
+    h.clock.advance(2_000);
     h.timers.entries[0]?.fire();
     const { status } = await pending;
     expect(status).toBe(403);
@@ -1204,6 +1223,7 @@ describe("handleDv secrets and forced error", () => {
     expect(h.kv.calls).toEqual([]);
     heldRead.resolve("anything");
     await tick();
+    expect(h.lines.filter((l) => l.includes('"event":"auth_failed"'))).toHaveLength(1);
   });
 
   it("dv_force_error answers 500 with no actor call and no cache write (test path E)", async () => {
@@ -1215,7 +1235,7 @@ describe("handleDv secrets and forced error", () => {
     expect(h.accounts.recordCalls).toEqual([]);
     expect(h.sessions.creates).toEqual([]);
     expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
-    expect(h.lastLog()).toMatchObject({ outcome: "error", reasons: ["dv_force_error"], status: 500 });
+    expect(h.dvLog()).toMatchObject({ outcome: "error", reasons: ["dv_force_error"], status: 500 });
   });
 });
 
@@ -1241,7 +1261,7 @@ describe("handleDv areas", () => {
       area_outage: "true",
       outage_eta: "by 18:00 today",
     });
-    expect(h.lastLog()).toMatchObject({ area: "8630", area_outage: "true", outcome: "ok" });
+    expect(h.dvLog()).toMatchObject({ area: "8630", area_outage: "true", outcome: "ok" });
   });
 
   it("an outage in another area does not flag the caller's", async () => {
@@ -1251,7 +1271,7 @@ describe("handleDv areas", () => {
     expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
   });
 
-  it("an area read that settles at exactly 2,000 ms (the T22 bound) is used for the caller's outage notice", async () => {
+  it("an area read that settles at exactly 2,500 ms (the T24 bound) is used for the caller's outage notice", async () => {
     const h = makeHarness();
     h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
     const heldGet = hold<unknown>();
@@ -1268,10 +1288,10 @@ describe("handleDv areas", () => {
 
     const pending = h.call(makeDvBody());
     await tick();
-    // The held read is the only pending 2,000 ms entry.
-    const areaEntry = h.timers.pending().find((e) => e.ms === 2_000);
+    // The held read is the only pending 2,500 ms entry.
+    const areaEntry = h.timers.pending().find((e) => e.ms === 2_500);
     expect(areaEntry).toBeDefined();
-    h.clock.advance(2_000);
+    h.clock.advance(2_500);
     heldGet.resolve(OUTAGE);
     const { status, body } = await pending;
 
@@ -1281,10 +1301,10 @@ describe("handleDv areas", () => {
       area_outage: "true",
       outage_eta: "by 18:00 today",
     });
-    expect(h.lastLog()).toMatchObject({ area_outage: "true", outcome: "ok", reasons: [] });
+    expect(h.dvLog()).toMatchObject({ area_outage: "true", outcome: "ok", reasons: [] });
   });
 
-  it("an area read settling at 2,001 ms times out: area_outage false with area_unknown, and the late answer is absorbed", async () => {
+  it("an area read still pending at the 2,500 ms bound leaves the area unknown: area_outage false with area_unknown, and the late answer is absorbed", async () => {
     const h = makeHarness();
     h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
     const heldGet = hold<unknown>();
@@ -1301,15 +1321,15 @@ describe("handleDv areas", () => {
 
     const pending = h.call(makeDvBody());
     await tick();
-    const areaEntry = h.timers.pending().find((e) => e.ms === 2_000);
+    const areaEntry = h.timers.pending().find((e) => e.ms === 2_500);
     expect(areaEntry).toBeDefined();
-    h.clock.advance(2_001);
+    h.clock.advance(2_501);
     areaEntry?.fire();
     const { status, body } = await pending;
 
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["area_unknown"],
       area_outage: "false",
@@ -1348,7 +1368,7 @@ describe("handleDv areas", () => {
     const { status, body } = await pending;
     expect(status).toBe(200);
     expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: ["area_unknown"],
       area_outage: "false",
@@ -1371,7 +1391,7 @@ describe("handleDv areas", () => {
     const { status, body } = await h.call(makeDvBody());
     expect(status).toBe(200);
     expect(body.dynamic_variables).toMatchObject({ area_code: "9000", area_outage: "false" });
-    expect(h.lastLog()).toMatchObject({ outcome: "ok", reasons: [], area_outage: "false" });
+    expect(h.dvLog()).toMatchObject({ outcome: "ok", reasons: [], area_outage: "false" });
   });
 });
 
@@ -1417,7 +1437,7 @@ describe("handleDv memory caches", () => {
     const h = makeHarness();
     seededCustomer(h);
     await h.call(makeDvBody());
-    expect(h.lastLog().cache).toBe("miss");
+    expect(h.dvLog().cache).toBe("miss");
 
     // Well within 60 s (but past the 10 s flag/area caches with a jump): the
     // caller comes from memory whatever else is re-read.
@@ -1425,7 +1445,7 @@ describe("handleDv memory caches", () => {
     h.crm.calls.length = 0;
     h.clock.advance(20_000);
     await h.call();
-    expect(h.lastLog().cache).toBe("memory");
+    expect(h.dvLog().cache).toBe("memory");
     expect(h.crm.calls).toEqual([]);
     expect(h.kv.calls.some((c) => c.key?.startsWith("crm/"))).toBe(false);
 
@@ -1436,13 +1456,13 @@ describe("handleDv memory caches", () => {
     h.clock.advance(39_999);
     h.kv.reset();
     await h.call();
-    expect(h.lastLog().cache).toBe("memory");
+    expect(h.dvLog().cache).toBe("memory");
     expect(h.crm.calls).toEqual([]);
 
     h.clock.advance(1);
     h.kv.reset();
     await h.call();
-    expect(h.lastLog().cache).toBe("kv");
+    expect(h.dvLog().cache).toBe("kv");
     expect(h.kv.calls.some((c) => c.method === "get" && c.key === kvKeys.crmPhone(CALLER_DIGITS))).toBe(true);
     expect(h.kv.calls.filter((c) => c.method === "put")).toEqual([]);
   });
@@ -1587,7 +1607,7 @@ describe("handleDv soft budget", () => {
       identity_level: "anonymous",
       greeting_line: "Hello",
     });
-    expect(h.lastLog()).toMatchObject({
+    expect(h.dvLog()).toMatchObject({
       outcome: "degraded",
       reasons: expect.arrayContaining(["crm_timeout", "session_timeout"]),
       cache: "miss",
@@ -1601,9 +1621,13 @@ describe("handleDv soft budget", () => {
     expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
   });
 
-  it("a cache write that times out is reported as cache_write failed, and a late resolution does not flip it", async () => {
-    const h = makeHarness();
-    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+});
+
+// ---------- the CRM cache write the answer never waits for (T24) ----------
+
+describe("handleDv CRM cache write (T24)", () => {
+  /** Wraps deps.kv so the put behind `crm/phone/<CALLER_DIGITS>` is held until the test settles it. */
+  function holdCacheWrite(h: Harness): HeldPromise<void> {
     const heldPut = hold<void>();
     const inner = h.deps.kv;
     h.deps.kv = {
@@ -1619,26 +1643,312 @@ describe("handleDv soft budget", () => {
       delete: inner.delete.bind(inner),
       list: inner.list.bind(inner),
     } as unknown as KvFake;
+    return heldPut;
+  }
 
-    const pending = h.call(makeDvBody());
-    await tick();
-    // Entry 12 is the cache write (recordCall 10, session 11, write 12).
-    const writeEntry = h.timers.entries[12];
-    expect(writeEntry?.ms).toBe(2_500);
-    writeEntry?.fire();
-    const { status, body } = await pending;
+  it("answers 200 with its token before the put settles, logs cache_write started, then one crm_cache_write ok line", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldPut = holdCacheWrite(h);
+
+    // The answer does not wait for the held put.
+    const { status, body } = await h.call(makeDvBody());
     expect(status).toBe(200);
-    expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
-    expect(h.lastLog()).toMatchObject({
+    const dynamic = body.dynamic_variables as Record<string, string>;
+    expect(dynamic.first_name).toBe("Marie");
+    expect(dynamic.session_ok).toBe("true");
+    expect(typeof (body.encrypted_dynamic_variables as { mcp_token: unknown }).mcp_token).toBe(
+      "string",
+    );
+    expect(h.dvLog()).toMatchObject({
+      cache: "miss",
+      cache_write: "started",
       outcome: "ok",
       reasons: [],
-      cache: "miss",
-      cache_write: "failed",
     });
+    // No outcome line while the write is still in flight.
+    expect(h.eventLines("crm_cache_write")).toEqual([]);
 
     heldPut.resolve(undefined);
     await tick();
+    const writeLines = h.eventLines("crm_cache_write");
+    expect(writeLines).toHaveLength(1);
+    expect(writeLines[0]).toMatchObject({ trace_id: CALL_CONTROL_ID, outcome: "ok" });
+    expect(typeof (writeLines[0]?.latency_ms as { total: unknown }).total).toBe("number");
+  });
+
+  it("a put still pending at the 2,500 ms bound logs crm_cache_write timeout after the answer left, and its late settlement logs nothing more", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldPut = holdCacheWrite(h);
+
+    const { status } = await h.call(makeDvBody());
+    expect(status).toBe(200);
+    expect(h.eventLines("crm_cache_write")).toEqual([]);
+
+    // The write keeps its own uncut 2,500 ms bound: it is the last entry.
+    h.clock.advance(2_500);
+    const writeEntry = h.timers.entries.at(-1);
+    expect(writeEntry?.ms).toBe(2_500);
+    writeEntry?.fire();
+    await tick();
+    const writeLines = h.eventLines("crm_cache_write");
+    expect(writeLines).toHaveLength(1);
+    expect(writeLines[0]).toMatchObject({ trace_id: CALL_CONTROL_ID, outcome: "timeout" });
+
+    heldPut.resolve(undefined);
+    await tick();
+    expect(h.eventLines("crm_cache_write")).toHaveLength(1);
     expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
+  });
+
+  it("a rejected put logs crm_cache_write failed, and the dv line still reads ok", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const inner = h.deps.kv;
+    h.deps.kv = {
+      get: inner.get.bind(inner) as never,
+      put: (() => Promise.reject(new Error("kv down"))) as never,
+      delete: inner.delete.bind(inner),
+      list: inner.list.bind(inner),
+    } as unknown as KvFake;
+
+    const { status, body } = await h.call(makeDvBody());
+    expect(status).toBe(200);
+    expect((body.dynamic_variables as Record<string, string>).first_name).toBe("Marie");
+    expect(h.dvLog()).toMatchObject({ cache_write: "started", outcome: "ok", reasons: [] });
+    await tick();
+    const writeLines = h.eventLines("crm_cache_write");
+    expect(writeLines).toHaveLength(1);
+    expect(writeLines[0]).toMatchObject({ trace_id: CALL_CONTROL_ID, outcome: "failed" });
+  });
+
+  it("an answer from memory, from KV, or a failed lookup starts no write", async () => {
+    // Failed lookup: unparseable JSON fails the KV side, mock-crm fails too.
+    const failed = makeHarness();
+    await failed.kv.put(kvKeys.crmPhone(CALLER_DIGITS), "{not json");
+    failed.kv.reset();
+    failed.crm.defaultResult = { ok: false };
+    const failedRes = await failed.call(makeDvBody());
+    expect(failedRes.status).toBe(200);
+    expect(failed.kv.calls.filter((c) => c.method === "put")).toEqual([]);
+    expect(failed.eventLines("crm_cache_write")).toEqual([]);
+    expect(failed.dvLog()).not.toHaveProperty("cache_write");
+
+    // KV hit.
+    const kvHit = makeHarness({ crmKvAnswers: { [CALLER_DIGITS]: JSON.stringify(CUSTOMER) } });
+    kvHit.crm.defaultResult = { ok: false };
+    const kvRes = await kvHit.call(makeDvBody());
+    expect(kvRes.status).toBe(200);
+    expect(kvHit.kv.calls.filter((c) => c.method === "put")).toEqual([]);
+    expect(kvHit.eventLines("crm_cache_write")).toEqual([]);
+    expect(kvHit.dvLog()).not.toHaveProperty("cache_write");
+
+    // Memory hit: the first call writes (and settles); the second serves
+    // from memory and starts nothing.
+    const warm = makeHarness();
+    warm.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    await warm.call(makeDvBody());
+    await tick();
+    expect(warm.eventLines("crm_cache_write")).toHaveLength(1);
+    warm.kv.reset();
+    const memRes = await warm.call(makeDvBody());
+    expect(memRes.status).toBe(200);
+    expect(warm.crm.calls).toHaveLength(1);
+    expect(warm.kv.calls.filter((c) => c.key?.startsWith("crm/"))).toEqual([]);
+    expect(warm.dvLog()).toMatchObject({ cache: "memory" });
+    expect(warm.dvLog()).not.toHaveProperty("cache_write");
+    expect(warm.eventLines("crm_cache_write")).toHaveLength(1);
+  });
+});
+
+// ---------- one deadline from arrival (T24) ----------
+
+describe("handleDv: one deadline from arrival (T24)", () => {
+  const T24_OUTAGE = {
+    state: "outage" as const,
+    incidentId: "INC-8630-202610141200",
+    eta: "by 18:00 today",
+    version: 4,
+    updatedAt: T0 - 60_000,
+  };
+
+  /** Holds the caller's own area read; every other key goes to the fake. */
+  function holdAreaGet(h: Harness): HeldPromise<unknown> {
+    const heldGet = hold<unknown>();
+    const inner = h.deps.kv;
+    h.deps.kv = {
+      get: ((key: unknown, options: unknown) =>
+        key === kvKeys.areaStatus("8630")
+          ? heldGet.promise
+          : (inner.get as (k: never, o: never) => Promise<unknown>)(key as never, options as never)),
+      put: inner.put.bind(inner),
+      delete: inner.delete.bind(inner),
+      list: inner.list.bind(inner),
+    } as unknown as KvFake;
+    return heldGet;
+  }
+
+  it("with the public key slow (1,200 ms), an area read still pending at the deadline is answered area_unknown at exactly 3,000 ms", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldKey = h.secrets.hold("TELNYX_PUBLIC_KEY");
+    const heldGet = holdAreaGet(h);
+
+    const pending = h.call(makeDvBody());
+    await tick();
+    // The public key read is minted at arrival, inside the budget's span.
+    expect(h.timers.entries[0]?.ms).toBe(2_000);
+    h.clock.advance(1_200);
+    heldKey.resolve(h.keyPair.publicKeyBase64);
+    await tick();
+
+    // 1,800 ms remain, so the held area read's 2,500 ms bound is cut to it.
+    const areaEntry = h.timers.pending().find((e) => e.ms === 1_800);
+    expect(areaEntry).toBeDefined();
+    h.clock.advance(1_800);
+    areaEntry?.fire();
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect((body.dynamic_variables as Record<string, string>).area_outage).toBe("false");
+    expect(h.dvLog()).toMatchObject({ outcome: "degraded", reasons: ["area_unknown"] });
+    // At the deadline (3,000 ms from arrival), not 2,500 ms after the read started.
+    expect((h.dvLog().latency_ms as { total: number }).total).toBe(3_000);
+  });
+
+  it("the same area read settling just inside the deadline is used", async () => {
+    const h = makeHarness();
+    h.crm.defaultResult = { ok: true, answer: { kind: "customer", customer: CUSTOMER } };
+    const heldKey = h.secrets.hold("TELNYX_PUBLIC_KEY");
+    const heldGet = holdAreaGet(h);
+
+    const pending = h.call(makeDvBody());
+    await tick();
+    h.clock.advance(1_200);
+    heldKey.resolve(h.keyPair.publicKeyBase64);
+    await tick();
+
+    const areaEntry = h.timers.pending().find((e) => e.ms === 1_800);
+    expect(areaEntry).toBeDefined();
+    h.clock.advance(1_799);
+    heldGet.resolve(T24_OUTAGE);
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect(areaEntry?.fired).toBe(false);
+    expect(body.dynamic_variables).toMatchObject({
+      area_outage: "true",
+      outage_eta: "by 18:00 today",
+    });
+    expect(h.dvLog()).toMatchObject({ area_outage: "true", outcome: "ok", reasons: [] });
+  });
+
+  it("a public key read settling at exactly the 2,000 ms bound passes the signature check", async () => {
+    const h = makeHarness();
+    const heldKey = h.secrets.hold("TELNYX_PUBLIC_KEY");
+    const pending = h.call(makeDvBody());
+    await tick();
+    expect(h.timers.entries[0]?.ms).toBe(2_000);
+    h.clock.advance(2_000);
+    heldKey.resolve(h.keyPair.publicKeyBase64);
+    const { status, body } = await pending;
+
+    expect(status).toBe(200);
+    expect(h.timers.entries[0]?.fired).toBe(false);
+    expect((body.dynamic_variables as Record<string, string>).session_ok).toBe("true");
+  });
+
+  it("a token key read started after a slow public key is cut to what remains and answers 500 secret_error at the 3,000 ms deadline", async () => {
+    const h = makeHarness();
+    const heldPublic = h.secrets.hold("TELNYX_PUBLIC_KEY");
+    const heldToken = h.secrets.hold("MCP_TOKEN_KEY");
+    const pending = h.call(makeDvBody());
+    await tick();
+    h.clock.advance(1_200);
+    heldPublic.resolve(h.keyPair.publicKeyBase64);
+    await tick();
+
+    // Entries 2 and 3 are the token keys, minted when 1,800 ms remained.
+    const tokenEntry = h.timers.entries[2];
+    expect(tokenEntry?.ms).toBe(1_800);
+    h.clock.advance(1_800);
+    tokenEntry?.fire();
+    const { status, body } = await pending;
+
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: "secret_error" });
+    // At the deadline, not 2,000 ms after the read started (3,200 ms).
+    expect((h.dvLog().latency_ms as { total: number }).total).toBe(3_000);
+    expect(h.accounts.recordCalls).toEqual([]);
+    expect(h.sessions.creates).toEqual([]);
+
+    heldToken.resolve(TOKEN_KEY_RAW);
+    await tick();
+    expect(h.lines.filter((l) => l.includes('"event":"dv"'))).toHaveLength(1);
+  });
+});
+
+// ---------- a withheld caller (T24) ----------
+
+describe("handleDv withheld caller (T24)", () => {
+  function expectAnonymousWithoutLookup(
+    h: Harness,
+    body: Record<string, unknown>,
+  ): void {
+    const dynamic = body.dynamic_variables as Record<string, string>;
+    expect(dynamic.session_ok).toBe("true");
+    expect(dynamic.identity_level).toBe("anonymous");
+    expect(dynamic.greeting_line).toBe("Hello");
+    expect(
+      typeof (body.encrypted_dynamic_variables as { mcp_token: unknown }).mcp_token,
+    ).toBe("string");
+    // No mock-crm call, and no crm/phone/ read or write.
+    expect(h.crm.calls).toEqual([]);
+    expect(h.kv.calls.filter((c) => c.key?.startsWith("crm/"))).toEqual([]);
+    expect(h.eventLines("crm_cache_write")).toEqual([]);
+  }
+
+  it("a null telnyx_end_user_target answers 200 anonymous with a token, no lookup and no callerPhone", async () => {
+    const h = makeHarness();
+    const { status, body } = await h.call(makeDvBody({ telnyx_end_user_target: null }));
+    expect(status).toBe(200);
+    expectAnonymousWithoutLookup(h, body);
+    // No callerPhone in the session, and the log's caller is null.
+    expect(h.sessions.creates).toEqual([
+      { sid: SID, input: { traceId: CALL_CONTROL_ID, identity: "anonymous", nowMs: T0 } },
+    ]);
+    expect(h.dvLog()).toMatchObject({
+      caller: null,
+      identity: "anonymous",
+      outcome: "ok",
+      reasons: [],
+    });
+  });
+
+  it("a missing telnyx_end_user_target takes the same anonymous path", async () => {
+    const h = makeHarness();
+    const body = makeDvBody();
+    delete (body.data as { payload: Record<string, unknown> }).payload.telnyx_end_user_target;
+    const { status, body: resBody } = await h.call(body);
+    expect(status).toBe(200);
+    expectAnonymousWithoutLookup(h, resBody);
+    expect(h.sessions.creates[0]?.input).not.toHaveProperty("callerPhone");
+    expect(h.dvLog()).toMatchObject({ caller: null, identity: "anonymous" });
+  });
+
+  it("a null telnyx_end_user_target_verified counts as false next to an anonymous target", async () => {
+    const h = makeHarness();
+    const { status, body } = await h.call(
+      makeDvBody({
+        telnyx_end_user_target: "+3258000",
+        telnyx_end_user_target_verified: null,
+      }),
+    );
+    expect(status).toBe(200);
+    expectAnonymousWithoutLookup(h, body);
+    // The short caller keeps its phone in the session, like any string target.
+    expect(h.sessions.creates[0]?.input).toMatchObject({ callerPhone: "+3258000" });
   });
 });
 

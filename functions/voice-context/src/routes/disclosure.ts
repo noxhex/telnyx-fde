@@ -26,8 +26,8 @@ const bodySchema = z.object({ session_id: z.string() });
 
 /**
  * One bounded, timed secret read: a sidecar HTTP call (DEBUGLOG issue 9) on
- * the `http` hop with a 1,000 ms timeout. A timeout, a thrown error or an
- * empty value all count as a failed read (null) — the callers' memoised
+ * the `http` hop with a 2,000 ms timeout (T24). A timeout, a thrown error or
+ * an empty value all count as a failed read (null) — the callers' memoised
  * stores keep successes only, so the next request tries again.
  */
 export async function readSecretTimed(
@@ -45,15 +45,20 @@ export async function readSecretTimed(
   }
 }
 
-/** The same, for a secret that must parse as a base64url key. */
+/**
+ * The same, for a secret that must parse as a base64url key. `maxMs` lets
+ * `/dv` cut the read to what remains of its soft budget (T24); every other
+ * caller gets the full `SECRET_READ_TIMEOUT_MS`.
+ */
 export async function readSecretKeyTimed(
   deps: VoiceContextDeps,
   timings: Timings,
   handle: string,
+  maxMs: number = SECRET_READ_TIMEOUT_MS,
 ): Promise<Uint8Array | null> {
   try {
     const raced = await timings.time("http", () =>
-      deps.timeout(() => deps.secrets.getKey(handle), SECRET_READ_TIMEOUT_MS),
+      deps.timeout(() => deps.secrets.getKey(handle), maxMs),
     );
     return raced === TIMED_OUT ? null : raced;
   } catch {

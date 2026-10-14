@@ -3,9 +3,12 @@
  * call setup latency budget (docs/ARCHITECTURE.md) and the flag document
  * shape. No I/O here — values and pure helpers only.
  *
- * Per-call steps 4 to 7 share `SOFT_BUDGET_MS`: every dependency timeout is
- * cut to what remains of the budget when the call starts, so a slow start
- * can never push the answer past it (card T08, step 8).
+ * The whole `/dv` call shares `SOFT_BUDGET_MS` from the moment `handleDv`
+ * starts, before the body read and the signature check (T24): every awaited
+ * dependency timeout is cut to what remains of the budget, so a fresh
+ * replica's slow first reads can never push the answer past it (card T08,
+ * step 8). Only the fire-and-forget CRM cache write is never cut — the
+ * answer does not wait for it.
  */
 
 import { z } from "zod";
@@ -22,8 +25,12 @@ export const SECRET_HANDLES = {
 
 export const SOFT_BUDGET_MS = 3_000;
 
-/** A secret read is one HTTP hop to the sidecar (DEBUGLOG issue 9); bounded like the KV hop, a timeout counts as a failed read. */
-export const SECRET_READ_TIMEOUT_MS = 1_000;
+/**
+ * A secret read is one HTTP hop to the sidecar (DEBUGLOG issue 9); a timeout
+ * counts as a failed read. 2,000 ms since T24: a fresh replica's first read
+ * has taken over 1,000 ms (DEBUGLOG issue 17, and again on 14 October).
+ */
+export const SECRET_READ_TIMEOUT_MS = 2_000;
 
 export const TIMEOUTS = {
   flagsMs: 1_000,
@@ -35,11 +42,19 @@ export const TIMEOUTS = {
    * cold replica (T20), about 1.7 s together (DEBUGLOG issue 17).
    */
   crmLookupMs: 2_000,
-  /** One area status KV read (T22: KV reads took 1,083 to 1,639 ms on 13 October — DEBUGLOG issue 17). */
-  areaStatusMs: 2_000,
+  /**
+   * One area status KV read. T24: 2,500 ms — on 14 October KV was about
+   * twice as slow as when T22 set 2,000, and the reads ran into that bound.
+   */
+  areaStatusMs: 2_500,
   recordCallMs: 600,
   sessionCreateMs: 1_000,
   sessionDisclosureMs: 1_000,
+  /**
+   * The KV write behind a mock-crm answer. Since T24 `/dv` never awaits it
+   * and it is never cut by the soft budget; it logs `crm_cache_write` when
+   * it settles.
+   */
   crmCacheWriteMs: 2_500,
   health: { kvPutMs: 2_500, kvGetMs: 1_500, crmMs: 1_500, actorMs: 1_000 },
 } as const;

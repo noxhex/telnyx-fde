@@ -3,22 +3,32 @@
  * first link in every call's trace (`trace_id` is the call control id).
  * The steps follow card T08 and the budget in docs/ARCHITECTURE.md:
  *
- *   1. signature over the raw body against TELNYX_PUBLIC_KEY (403 `no_key`
- *      fails closed, before any KV or actor access);
+ *   1. signature over the raw body against TELNYX_PUBLIC_KEY (the read
+ *      waits up to 2,000 ms, T24; 403 `no_key` fails closed, before any KV
+ *      or actor access);
  *   2. zod parse, `assistant.initialization` only (400 otherwise);
  *   3. sid = sessionIdFromCallControlId(call_control_id);
  *   4. both token keys, the flags, the CRM lookup and the five area
- *      statuses start together — the flags from the container's refreshing
- *      value (T20), so only a container's first requests can wait for KV,
- *      the rest each inside its own timeout behind the memory caches. A
- *      caller with fewer than eight digits is anonymous without any lookup,
- *      like a caller with no phone at all (T22, DEBUGLOG issue 17);
+ *      statuses start together — the token keys cut to what remains of the
+ *      soft budget like every other awaited wait here (T24), the flags
+ *      from the container's refreshing value (T20), so only a container's
+ *      first requests can wait for KV, the rest each inside its own
+ *      timeout behind the memory caches. A caller with fewer than eight
+ *      digits is anonymous without any lookup, like a caller with no phone
+ *      at all (T22, DEBUGLOG issue 17), and so is a withheld number, which
+ *      arrives as a missing or null end user target (T24);
  *   5. flags first — `dv_force_error` answers 500 before any state change;
- *   6/7. once the CRM lookup has answered: recordCall, SESSION.create and
- *      the KV cache write (mock-crm answers only) run in parallel;
- *   8. steps 4–7 share the 3,000 ms soft budget — every timeout is cut to
- *      what remains, and whatever is still pending when it runs out is
- *      answered as its failure reason instead of awaited;
+ *   6/7. once the CRM lookup has answered: recordCall and SESSION.create
+ *      run in parallel, awaited. The KV cache write (mock-crm answers
+ *      only) starts here too, but the answer never waits for it (T24): it
+ *      keeps its own 2,500 ms bound, uncut, and writes its own
+ *      `crm_cache_write` log line when it settles, while the `dv` line's
+ *      `cache_write` field just reads `started`;
+ *   8. the whole request shares the 3,000 ms soft budget from the moment
+ *      handleDv starts, before the body read and the signature check
+ *      (T24) — every awaited timeout is cut to what remains, and whatever
+ *      is still pending when it runs out is answered as its failure
+ *      reason instead of awaited;
  *   9. token minted under MCP_TOKEN_KEY, encrypted under MCP_ENC_KEY;
  *  10. one response, values nested under `dynamic_variables`;
  *  11. one `dv` log line.
@@ -45,6 +55,7 @@ import {
   parseAreaStatus,
   parseCrmCacheValue,
   SECRET_HANDLES,
+  SECRET_READ_TIMEOUT_MS,
   SESSION_TTL_MS,
   SOFT_BUDGET_MS,
   TIMED_OUT,
@@ -64,11 +75,13 @@ const dvBodySchema = z.object({
   data: z.object({
     event_type: z.literal("assistant.initialization"),
     payload: z.object({
-      telnyx_end_user_target: z.string(),
+      // T24: a withheld number arrives as a missing or null target; the
+      // verified flag may be missing or null (counts as false).
+      telnyx_end_user_target: z.string().nullish(),
       telnyx_agent_target: z.string(),
       call_control_id: z.string(),
       telnyx_conversation_channel: z.string(),
-      telnyx_end_user_target_verified: z.boolean().optional(),
+      telnyx_end_user_target_verified: z.boolean().nullish(),
     }),
   }),
 });
@@ -231,7 +244,8 @@ interface DvLogFields {
   areaOutage: boolean;
   repeatCaller: boolean;
   cache: "memory" | "kv" | "miss";
-  cacheWrite: "ok" | "failed" | null;
+  /** `started` when the fire-and-forget CRM cache write began (T24); its own `crm_cache_write` line carries the outcome. */
+  cacheWrite: "started" | null;
   outcome: "ok" | "degraded" | "error";
   reasons: string[];
   status: number;
@@ -260,6 +274,10 @@ function logDv(deps: VoiceContextDeps, timings: Timings, fields: DvLogFields): v
 
 export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Response> {
   const timings = startTimings(deps.now);
+  // Step 8's budget starts at arrival (T24), before the body read and the
+  // signature check, so a fresh replica's slow first reads can never push
+  // the answer past it.
+  const budget = { startMs: deps.now(), deps };
 
   const rawBody = await req.text();
   const signature = await verifySignedRequest(req, rawBody, deps, timings);
@@ -286,7 +304,12 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   const sid = sessionIdFromCallControlId(traceId);
   const channel = payload.telnyx_conversation_channel.slice(0, 32);
   const isPhoneCall = payload.telnyx_conversation_channel === "phone_call";
-  const callerPhone = isPhoneCall ? payload.telnyx_end_user_target : null;
+  // A withheld number arrives as a missing or null target (T24): no
+  // callerPhone anywhere, like a call with no phone at all.
+  const callerPhone =
+    isPhoneCall && typeof payload.telnyx_end_user_target === "string"
+      ? payload.telnyx_end_user_target
+      : null;
   const digits = callerPhone === null ? null : callerPhone.replace(/\D/g, "");
   // A caller with too few digits to be a subscriber number is anonymous
   // without any lookup (T22): no mock-crm call and no `crm/phone/` key,
@@ -296,11 +319,21 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
 
   // Step 4: both token keys, the flags, the CRM lookup and the five area
   // statuses start together — cold containers pay the sidecar reads here,
-  // in parallel, instead of after the budget.
-  const budget = { startMs: deps.now(), deps };
+  // in parallel. The token keys are cut to what remains of the budget
+  // (T24), like every other awaited wait in this route.
   const flagsPromise = readFlags(deps, timings, budget);
-  const tokenKeyPromise = readSecretKeyTimed(deps, timings, SECRET_HANDLES.mcpTokenKey);
-  const encKeyPromise = readSecretKeyTimed(deps, timings, SECRET_HANDLES.mcpEncKey);
+  const tokenKeyPromise = readSecretKeyTimed(
+    deps,
+    timings,
+    SECRET_HANDLES.mcpTokenKey,
+    cut(SECRET_READ_TIMEOUT_MS, budget),
+  );
+  const encKeyPromise = readSecretKeyTimed(
+    deps,
+    timings,
+    SECRET_HANDLES.mcpEncKey,
+    cut(SECRET_READ_TIMEOUT_MS, budget),
+  );
   const lookupPromise: Promise<LookupOutcome> =
     lookupDigits === null
       ? Promise.resolve({ answer: null, reason: "no_phone" })
@@ -349,7 +382,6 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
   // Step 7: once the CRM lookup has answered, the state-changing calls run
   // in parallel, each cut to what remains of the budget.
   let repeatCaller = false;
-  let cacheWrite: "ok" | "failed" | null = null;
   const recordCallPromise =
     customer === null
       ? Promise.resolve()
@@ -403,31 +435,42 @@ export async function handleDv(req: Request, deps: VoiceContextDeps): Promise<Re
       reasons.push("session_error");
     }
   })();
-  const cacheWritePromise =
-    lookupDigits === null || lookup.answer === null || lookup.source !== "crm"
-      ? Promise.resolve()
-      : (async (): Promise<void> => {
-          try {
-            const raced = await timings.time("kv", () =>
-              deps.timeout(
-                () =>
-                  deps.kv.put(kvKeys.crmPhone(lookupDigits), encodeCrmCacheValue(lookup.answer), {
-                    expirationTtl: CRM_KV_TTL_SEC,
-                  }),
-                cut(TIMEOUTS.crmCacheWriteMs, budget),
-              ),
-            );
-            cacheWrite = raced === TIMED_OUT ? "failed" : "ok";
-          } catch {
-            cacheWrite = "failed";
-          }
-        })();
-  const [areas] = await Promise.all([
-    areasPromise,
-    recordCallPromise,
-    sessionPromise,
-    cacheWritePromise,
-  ]);
+  // The KV copy of a mock-crm answer starts here, but the answer never
+  // waits for it (T24): it keeps its own 2,500 ms bound, uncut by the
+  // budget, and writes its own `crm_cache_write` line when it settles. A
+  // failing write can never reject anything or surface unhandled.
+  const cacheWriteAnswer = lookup.answer !== null && lookup.source === "crm" ? lookup.answer : null;
+  const cacheWrite: "started" | null =
+    cacheWriteAnswer !== null && lookupDigits !== null ? "started" : null;
+  if (cacheWriteAnswer !== null && lookupDigits !== null) {
+    const answer = cacheWriteAnswer;
+    const digitsKey = lookupDigits;
+    void (async (): Promise<void> => {
+      try {
+        const raced = await timings.time("kv", () =>
+          deps.timeout(
+            () =>
+              deps.kv.put(kvKeys.crmPhone(digitsKey), encodeCrmCacheValue(answer), {
+                expirationTtl: CRM_KV_TTL_SEC,
+              }),
+            TIMEOUTS.crmCacheWriteMs,
+          ),
+        );
+        deps.log.log(raced === TIMED_OUT ? "warn" : "info", "crm_cache_write", {
+          trace_id: traceId,
+          outcome: raced === TIMED_OUT ? "timeout" : "ok",
+          latency_ms: timings.snapshot(),
+        });
+      } catch {
+        deps.log.log("warn", "crm_cache_write", {
+          trace_id: traceId,
+          outcome: "failed",
+          latency_ms: timings.snapshot(),
+        });
+      }
+    })();
+  }
+  const [areas] = await Promise.all([areasPromise, recordCallPromise, sessionPromise]);
 
   // A caller in one of the five areas whose read failed or timed out may
   // have missed the outage notice — degraded, with a reason, even though

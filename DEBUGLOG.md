@@ -501,6 +501,38 @@ The route checks the Telnyx signature first and answers 403 when it fails (`func
 
 **Design impact.** T11's shape for the disclosure tool changes. The unsigned path from T11's decision 7 is not needed, because Telnyx signs webhook tool requests.
 
+## 20. A slow call setup could cost a phone call its token
+
+**Date** 14 Oct 2026 · **Area** Edge Compute, KV and replicas
+
+**Symptom.** No call has failed this way yet. On the morning of the review Thiago's smoke test failed voice-context's KV probe twice. Claude Code then checked the call setup budget against the morning's numbers and found that a phone call on a fresh replica could get its variables too late or not at all.
+
+**Evidence.** Claude Code read the logs with read-only commands. Times are UTC.
+
+```text
+# telnyx-edge logs voice-context --type runtime, trimmed, the two browser calls and the first smoke run
+[2026-10-14T06:27:43.220Z] {"event":"dv","channel":"phone_call","identity":"anonymous","outcome":"ok","status":200,"latency_ms":{"total":2014,"http":9,"kv":9013,"actor":401}}
+[2026-10-14T06:32:56.557Z] {"event":"dv","channel":"phone_call","identity":"anonymous","outcome":"ok","status":200,"latency_ms":{"total":2888,"http":890,"kv":9577,"actor":481}}
+[2026-10-14T06:45:21.935Z] {"event":"health","ok":false,"status":503,"checks":{"kv":{"ok":false,"latency_ms":3981},"crm":{"ok":true,"latency_ms":41}}}
+# telnyx-edge logs voice-tools --type runtime, trimmed
+[2026-10-14T06:27:54.401Z] {"event":"auth_failed","route":"mcp","reason":"secret_error","status":503,"latency_ms":{"total":1002,"http":1000}}
+```
+
+- In both calls the five area reads ran into their 2,000 ms bound. The KV probe's put took about 2.3 to 2.5 s and its get ran out at 1.5 s, about twice the times of 13 October.
+- A fresh replica's secret reads cost the second call 890 ms. voice-tools' token key read on a fresh replica ran past its 1,000 ms bound, and Telnyx opened the MCP session again four seconds later.
+
+**Cause.** Three gaps in `/dv`.
+
+1. The public key read was cut at 1,000 ms, and a fresh replica's first read can take longer. `/dv` then answers 403.
+2. The 3,000 ms budget started after that read. A phone call whose caller mock-crm answered also waited for the CRM cache write in KV. On a fresh replica that came to 3.5 to 4.0 s of server time, against a webhook timeout of 4,000 ms.
+3. The payload schema rejected a missing or null caller, which a withheld number may bring. Telnyx does not document what it sends then.
+
+When `/dv` answers late or with an error, Telnyx uses the defaults, so the call goes to Degraded with no MCP token (`docs/ARCHITECTURE.md`, Failure modes). Browser test calls never look the caller up, so they could not show the second gap.
+
+**Fix.** Card T24. The budget starts when the request arrives, and the token key reads are cut to what remains, so `/dv` answers within 3,000 ms of server time. Secret reads wait up to 2,000 ms and area reads up to 2,500 ms. The cache write no longer holds the answer and logs its own `crm_cache_write` line. A missing or null caller is anonymous.
+
+**Design impact.** The call setup budget in `docs/ARCHITECTURE.md` changes. voice-tools' MCP auth read keeps its 1,000 ms bound for the review (README, Known issues).
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.

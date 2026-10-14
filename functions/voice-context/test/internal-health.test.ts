@@ -320,7 +320,7 @@ describe("handleInternalHealth checks", () => {
     const h = makeHarness();
     h.crmQueue.push({ ok: true, answer: { kind: "not_found" } });
     await h.call(INTERNAL_KEY);
-    expect(h.timerMs()).toEqual([1_000, 2_500, 1_500, 1_000, 1_000, 1_500]);
+    expect(h.timerMs()).toEqual([2_000, 2_500, 1_500, 1_000, 1_000, 1_500]);
   });
 
   it("answers 503 when the KV put fails", async () => {

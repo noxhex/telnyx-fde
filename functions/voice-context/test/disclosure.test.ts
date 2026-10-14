@@ -244,7 +244,7 @@ describe("handleDisclosure outcomes", () => {
       trace_id: "v3:trace-1",
       status: 200,
     });
-    expect(h.timerMs()).toEqual([1_000, 1_000]);
+    expect(h.timerMs()).toEqual([2_000, 1_000]);
   });
 
   it("an unchanged outcome answers { logged: true }", async () => {
@@ -303,7 +303,7 @@ describe("handleDisclosure outcomes", () => {
     h.sessions.queue.push({ hold: held });
     const pending = h.call({ session_id: VALID_SID });
     await tick();
-    expect(h.timerMs()).toEqual([1_000, 1_000]);
+    expect(h.timerMs()).toEqual([2_000, 1_000]);
     h.firePending();
     const res = await pending;
     expect(res.status).toBe(200);
