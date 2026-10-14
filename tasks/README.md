@@ -85,7 +85,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T28 | One name in the opening, no repeats, no pause after the outage notice | T27 | done, provisioned on 14 Oct |
 | T29 | The opening question in the disclosure, and a warm transfer | T28 | rolled back on 14 Oct (DEBUGLOG issue 29) |
 | T30 | The Handoff line and voicemail detection on the transfer | T28 | done, provisioned and verified on calls on 14 Oct |
-| T31 | A question after each booking, and a callback number | T30 | done, Thiago runs the provisioning script three times |
+| T31 | A question after each booking, and a callback number | T30 | done, verified on calls on 14 Oct |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | in progress, no agent code. The evening rehearsal of 14 Oct is in `docs/TEST-PLAN.md` |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |

@@ -798,9 +798,21 @@ After `stop_transfer` the call took the Transfer node's default edge to Take mes
 
 **Cause.** Take message's instructions end with the read-back, and the base instructions tell the model never to say goodbye itself. So after the read-back it waits for the caller, and its one edge, to End call, fires on the caller's next turn. In `assistant/flow.ts` every way into Take message is the Transfer node's single default edge, so a transfer that fails for any other reason reaches the same instructions and has the same gap. Repair ticket's instructions end the same way. In the rehearsal the repair visit was booked from Verify (issue 23), and there the model asked on its own whether there was anything else.
 
-**Fix.** None before the review, because behaviour is frozen. After it, one line at the end of Take message's instructions, in `docs/WORKFLOW.md` and `assistant/instructions/take-message.md`, `- Then ask whether there is anything else you can help with.` Repair ticket would get the same line.
+**Fix.** Thiago approved card T31 the same evening. It adds `- Then ask whether there is anything else you can help with.` after the read-back in Take message and at the end of Repair ticket. It also has Take message ask a caller who is not a known customer for a number to call back and put it in the summary, because a callback from a withheld or unknown number stores none. Verified on a browser call that evening, times UTC, with the caller's number left out.
 
-**Design impact.** None yet. The README lists it as a known issue.
+```text
+20:06:34.896 n_transfer RESULT     Voicemail detected while transferring. Destination disconnected.
+20:06:35.226 n_message  assistant  I'm sorry, but the transfer did not go through. I can arrange for an agent to call you back instead. Would you like that?
+20:07:00.321 n_message  assistant  Got it. And what number should we call you back on?
+20:07:10.511 n_message  CALL       create_ticket {"category":"callback","summary":"Callback request for internet issues (intermittent connection). Customer requests tomorrow at 3 PM. Call back on [number]."}
+20:07:12.400 n_message  assistant  Your callback ticket is T-0-0-6-2. The window is tomorrow between 8 AM and noon. Your preferred time of 3 PM is noted on the ticket. Is there anything else I can help you with?
+20:07:24.729 n_message  user       No. That would be all. Thank you.
+20:07:26.296 n_end__msg assistant  Thanks for calling Duinvezel. Goodbye.
+```
+
+In a second call two minutes later, Wout's repair visit was booked from Verify (issue 23), so Repair ticket's new line did not run. The model asked on its own whether there was anything else. A real withheld number is still untested, because `#31#` did not withhold Thiago's number.
+
+**Design impact.** Take message and Repair ticket in `docs/WORKFLOW.md`. The README no longer lists this or the withheld-number gap as known issues.
 
 ## S1 measurements
 
