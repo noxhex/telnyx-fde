@@ -712,9 +712,9 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Cause.** The shared transfer tool set only `targets` and `from` (`scripts/provision/desired.ts`). Telnyx documents ringback for the caller only for a warm transfer with acceptance, where the caller stays with the assistant while it talks to the person who answered (ADR-021).
 
-**Fix.** Card T29 made the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021), and told the caller to expect ringing. It was rolled back with the rest of T29 the same evening (issue 29), before any call tested the transfer, so the transfer is T28's plain one again.
+**Fix.** Card T29 made the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021), and told the caller to expect ringing. It was rolled back with the rest of T29 the same evening (issue 29), before any call tested the transfer. Card T30 brings back only voicemail detection, with acceptance switched off, so the caller still hears silence, and the Handoff line now says it may be quiet for a moment.
 
-**Design impact.** ADR-021, rolled back with T29.
+**Design impact.** ADR-021, rolled back with T29 and amended for T30.
 
 ## 29. The model spoke before the caller could answer, and one call hung up
 

@@ -218,7 +218,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-021. A transfer briefs the engineer, waits for a yes and stops at voicemail
 
-**Status.** Rolled back on 14 October with T29, before any call tested it (DEBUGLOG issue 29). Thiago had accepted it earlier that day.
+**Status.** Rolled back on 14 October with T29, before any call tested it (DEBUGLOG issue 29). Thiago had accepted it earlier that day. The same evening he approved T30, which brings back only voicemail detection, as the amendment at the end says.
 
 **Evidence.** Telnyx's pages on warm transfer acceptance (https://developers.telnyx.com/docs/inference/ai-assistants/warm-transfer-acceptance.md) and on voicemail detection on transfer (https://developers.telnyx.com/docs/inference/ai-assistants/voicemail-detection-on-transfer.md), and the `TransferToolParams` schema in Telnyx's OpenAPI spec (https://raw.githubusercontent.com/team-telnyx/openapi/master/openapi/spec3.json), read on 14 October. DEBUGLOG issue 28.
 
@@ -236,3 +236,11 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 - Acceptance is documented only for calls started with `ai_assistant_start`, and not for web calls. The docs do not say whether calls through the assistant's TeXML application and the portal's browser calls count, though both carry the channel `phone_call` in their transcripts. Where acceptance cannot run, the transfer falls back to a warm transfer that plays the brief to the engineer and then bridges.
 - The Transfer node's default edge is documented for a transfer that fails. Whether a decline or a stop at voicemail takes it to Take message is not documented, and the calls after T29 show it.
 - In private mode the transfer's result is the only record of the outcome in the transcript.
+
+**Amendment for T30, 14 October.** The transfer sets `voicemail_detection` in `premium` mode with `stop_transfer`, and nothing else from this decision. Telnyx's voicemail page shows detection on a transfer that sets only `targets` and `from`. Acceptance is sent switched off, as `warm_transfer_acceptance.enabled` false, for three reasons.
+
+- It is documented only for calls started with `ai_assistant_start`, and not for web calls. Phone calls reach the assistant through its TeXML application, and the demo's transfers come from browser calls. Where it cannot run, the assistant reads the brief to the engineer before bridging, which makes the caller's silence longer.
+- No call before the review could test it where it would run, because a transfer from Thiago's mobile rings the same mobile.
+- If it ran and stalled, the caller would wait up to two minutes.
+
+It is sent as false rather than left out, because the provisioning script compares only the keys it sends and could not turn off a value that T29 left on the live tool (DEBUGLOG issue 29). The API documents no value that switches a brief off, so a brief left from T29 comes off in the portal. There is no brief, because without acceptance it would only make the silence longer. The caller hears no ringback without acceptance (DEBUGLOG issue 28), so the Handoff line says it may be quiet for a moment, and it keeps the recording notice. The amendment is untested until Thiago's calls after T30. If they have not passed by 21:30 on 14 October, T28's transfer stays for the review.
