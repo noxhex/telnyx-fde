@@ -549,7 +549,7 @@ The shared transfer tool dials `TRANSFER_TO` from the assistant's number (`scrip
 
 **Cause.** The outbound voice profile of the connection making the call did not allow Belgium, so Telnyx refused the dial command. The transcripts show no other error. On the call from Thiago's mobile the transfer would have rung that same busy phone, but nothing was dialled. After each failure the call went to Take message, as designed.
 
-**Fix.** At 15:19 Brussels time Thiago allowed Europe on the account's default outbound voice profile in the portal. The provisioning script calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so it never reads or changes a profile. The README lists the step under Manual setup. In the evening rehearsal the transfer in Geert's browser call rang Thiago's mobile at 15:24 UTC, and the tool's result read `Transfer completed` (issue 28).
+**Fix.** At 15:19 Brussels time Thiago allowed Europe on the account's default outbound voice profile in the portal. The provisioning script calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so it never reads or changes a profile. The README lists the step under Setup. In the evening rehearsal the transfer in Geert's browser call rang Thiago's mobile at 15:24 UTC, and the tool's result read `Transfer completed` (issue 28).
 
 **Design impact.** A transfer from a call made on `TRANSFER_TO` rings the phone that is already on the call. The repeat-caller path from Thiago's mobile can therefore never reach a person, and transfers are tested from the browser.
 

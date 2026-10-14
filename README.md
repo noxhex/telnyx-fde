@@ -14,6 +14,8 @@ A Telnyx AI voice assistant for Duinvezel, a fictional fiber provider on the Bel
 | mock-crm | https://mock-crm-26584f2f-d.telnyxcompute.com, the fake back office |
 | MCP server URL | https://voice-tools-11c54a81-0.telnyxcompute.com/mcp, Streamable HTTP. It answers 401 without the per-call token that call setup mints (ADR-008) |
 | OpenCode config | `.opencode/opencode.json`, with the three agents in `.opencode/agents/` |
+| Demo script | `docs/DEMO.md` |
+| Setup | "Setup" below, from a fresh clone to a working phone number |
 
 The function URLs and every platform id are also in `infra/ids.json`.
 
@@ -139,11 +141,80 @@ Telnyx-hosted models wrote the application code, tests, scripts and infrastructu
 - **`tools/card.sh`.** It runs one card at a time, the implementer, then `npm run check`, then the reviewer. It records the session, the models that answered and the tokens of every run. Claude Code then reads the whole diff, and it accepts the card or retries it with written feedback.
 - **The record.** [`DOGFOODING.md`](DOGFOODING.md) has a ledger row per attempt, with its cost and what broke, the bake-off, and what worked and what did not. [`docs/agent-runs.jsonl`](docs/agent-runs.jsonl) has every run, failed ones included, 55 runs over 28 cards.
 
-## Manual setup
+## Setup
 
-`scripts/provision.ts` creates or updates the assistant, its three shared tools and the MCP server, and attaches the phone number to the assistant's TeXML application. It calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so one setting stays manual.
+From a fresh clone to a working phone number. Every key and number stays in `~/.config/telnyx/env` or in a secret, never in the repo. The `telnyx.toml` files and `infra/ids.json` name this deployment's functions, KV namespace and mock-crm URL, so another Telnyx account first registers its own three functions, as `tasks/T01-repo-scaffold.md` did, and puts their ids and URLs there.
 
-- **The outbound voice profile.** The transfer dials `TRANSFER_TO` from the assistant's number, so the outbound voice profile of the connection making the call must allow the target's country. On 14 October it allowed no Belgian number, and both afternoon transfers failed before anything rang (DEBUGLOG issue 21). Thiago then allowed Europe on the account's default profile, on the portal's Outbound Voice Profiles page, and in the evening rehearsal a transfer from a browser call rang his mobile. A new account needs the same step before a transfer can ring anyone.
+1. **Prerequisites.** Node 26 with npm, the `telnyx-edge` CLI, `curl`, `jq`, `openssl`, and a Telnyx number for the assistant. This repo runs on Node v26.11.1, npm 12.2.0 and `telnyx-edge` v0.5.10. `~/.config/telnyx/env` exports the Telnyx API key as `TELNYX_API_KEY`, the assistant's number as `DUINVEZEL_PHONE_NUMBER` and the phone a transfer rings as `TRANSFER_TO`, both numbers in E.164.
+
+   ```bash
+   node --version && npm --version && telnyx-edge --version
+   telnyx-edge auth login
+   ```
+
+2. **Install and check.** The check typechecks every workspace and runs every test.
+
+   ```bash
+   npm ci
+   npm run check
+   ```
+
+3. **The KV namespace and its flags.** The namespace id goes in `infra/ids.json` and in each `telnyx.toml`. If the create times out, check `telnyx-edge storage kv list` before trying again (DEBUGLOG issue 5). Every flag value below is the code's default, so the functions behave the same without the document.
+
+   ```bash
+   telnyx-edge storage kv create --name duinvezel
+   NS=$(jq -r .kvNamespaceId infra/ids.json)
+   telnyx-edge storage kv key put "$NS" flags/global '{"incident_threshold":3,"report_window_secs":1800,"incident_eta_minutes":240,"diagnostics_enabled":true,"dv_force_error":false,"crm_delay_ms":0,"crm_fail":false}'
+   ```
+
+4. **Secrets.** Edge secrets are shared by every function in the account, and each value comes from a command. `MCP_TOKEN_KEY` signs and checks the per-call token (voice-context and voice-tools). `MCP_ENC_KEY` encrypts it for Telnyx (voice-context), and Telnyx's integration secret `mcp_enc_key` holds the same value, because a mismatch crashes a call at its first tool use (DEBUGLOG issue 13). `INTERNAL_KEY` guards the internal routes and mock-crm (all three). `TELNYX_PUBLIC_KEY` checks Telnyx's webhook signatures (voice-context). `DEMO_CALLER_PHONE` is the number mock-crm knows as the demo customer (mock-crm).
+
+   ```bash
+   source ~/.config/telnyx/env
+   gen() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '='; }
+   telnyx-edge secrets add MCP_TOKEN_KEY "$(gen)"
+
+   ENC=$(gen); telnyx-edge secrets add MCP_ENC_KEY "$ENC"
+   echo "export DUINVEZEL_MCP_ENC_KEY=\"$ENC\"" >> ~/.config/telnyx/env; unset ENC
+
+   INT=$(gen); telnyx-edge secrets add INTERNAL_KEY "$INT"
+   echo "export DUINVEZEL_INTERNAL_KEY=\"$INT\"" >> ~/.config/telnyx/env; unset INT
+
+   telnyx-edge secrets add TELNYX_PUBLIC_KEY "$(curl -s -H "Authorization: Bearer $TELNYX_API_KEY" https://api.telnyx.com/v2/public_key | jq -r '.data.public')"
+
+   read -rsp 'Demo caller phone in E.164 ' P; echo
+   telnyx-edge secrets add DEMO_CALLER_PHONE "$P"; unset P
+
+   source ~/.config/telnyx/env
+   curl -sS -X POST https://api.telnyx.com/v2/integration_secrets \
+     -H "Authorization: Bearer $TELNYX_API_KEY" -H "Content-Type: application/json" \
+     -d "{\"identifier\":\"mcp_enc_key\",\"type\":\"bearer\",\"token\":\"$DUINVEZEL_MCP_ENC_KEY\"}" | jq '.data.identifier'
+   ```
+
+5. **Ship, in this order.** voice-tools ships the actor classes that voice-context binds. If the CLI gives up, check `telnyx-edge list` and `telnyx-edge ship status <name>` before shipping again.
+
+   ```bash
+   (cd functions/mock-crm && telnyx-edge ship --timeout 15m)
+   (cd functions/voice-tools && telnyx-edge ship --timeout 15m)
+   (cd functions/voice-context && telnyx-edge ship --timeout 15m)
+   ```
+
+6. **Provision the assistant.** `scripts/provision.ts` checks the integration secret, creates or updates the three shared tools, the MCP server and the assistant, attaches the number to the assistant's TeXML application and writes the ids to `infra/ids.json`. The dry run sends only reads and writes no file. The rerun must print `unchanged` for every resource.
+
+   ```bash
+   source ~/.config/telnyx/env
+   node scripts/provision.ts --dry-run
+   node scripts/provision.ts
+   node scripts/provision.ts
+   ```
+
+7. **The outbound voice profile, in the portal.** The transfer dials `TRANSFER_TO` from the assistant's number, so the outbound voice profile of the connection making the call must allow the target's country. The script calls only `/integration_secrets`, `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so this step stays manual. On 14 October the profile allowed no Belgian number, and both afternoon transfers failed before anything rang (DEBUGLOG issue 21). With Europe allowed on the account's default profile, on the portal's Outbound Voice Profiles page, the evening's transfers rang.
+
+8. **Confirm.** Every check prints PASS. Then call the number.
+
+   ```bash
+   source ~/.config/telnyx/env && scripts/smoke.sh
+   ```
 
 ## Before a demo
 

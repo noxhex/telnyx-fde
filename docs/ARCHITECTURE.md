@@ -46,6 +46,7 @@ Duinvezel's voice assistant answers every call and does four things.
       ▼
    mock-crm (stand-in for the ISP back office)
 
+   Planned, not built (README, "Next step, a canary"):
    Canary actor, alarm every 30 s ▶ /internal/health on each function ▶ push alert after 2 failures
 ```
 

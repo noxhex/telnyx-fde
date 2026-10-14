@@ -30,7 +30,7 @@ All the unknown-caller calls are browser calls, never from `DEMO_CALLER_PHONE`. 
 | Browser | Anke, DV-100006, 8670 | I, threshold crossing | Her report is the third, the incident is declared once, and the next caller in 8670 hears the outage notice |
 | Browser | Geert, DV-100007, 8600 | H, lockout, then the transfer | Three wrong postcodes lock the account, Handoff transfers the call to Thiago's mobile, and a second call is still locked |
 
-Path D, the repeat caller, comes free on Thiago's third call within 24 hours. Run `reset` before review day so it does not. Its transfer would ring the phone already on the call, so it cannot reach a person (DEBUGLOG issue 21). Transfers are tested from the browser, and they need the outbound voice profile in the README's Manual setup.
+Path D, the repeat caller, comes free on Thiago's third call within 24 hours. Run `reset` before review day so it does not. Its transfer would ring the phone already on the call, so it cannot reach a person (DEBUGLOG issue 21). Transfers are tested from the browser, and they need the outbound voice profile in the README's Setup.
 
 ## Evidence for each call
 
