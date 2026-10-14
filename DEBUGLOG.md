@@ -774,6 +774,34 @@ The provisioning script compares only the keys it sends (`scripts/provision/comp
 
 **Design impact.** `docs/WORKFLOW.md` keeps the question with the model. An instruction cannot make a step wait for the caller when a tool node starts it. The disclosure could end with the question only if no tool node stood between it and the caller's answer, as with the outage notice since T28 (issue 24). ADR-021's transfer settings come back only as a separate change.
 
+## 30. The assistant went quiet after it booked a callback
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** In Thiago's third call after T30, the transfer rang through to his voicemail and came back to the assistant, which offered a callback and booked it. After it read back the ticket it did not ask whether there was anything else. It stayed silent until he spoke, and then it said goodbye and hung up.
+
+**Evidence.** The transcript, times UTC.
+
+```text
+18:47:40.213 n_transfer CALL       transfer {}
+18:48:15.817 n_transfer RESULT     Voicemail detected while transferring. Destination disconnected.
+18:48:16.611 n_message  assistant  I'm sorry, the transfer didn't go through. I can arrange for an agent to call you back instead. Would you like that?
+18:48:33.873 n_message  CALL       create_ticket {"category":"callback","summary":"Customer requested callback tomorrow around 5 PM. Customer wants to speak to an agent."}
+18:48:35.412 n_message  RESULT     ticket T-9861, window 2026-10-15 08:00-12:00
+18:48:35.724 n_message  assistant  Your callback ticket is T-9-8-6-1. The window is tomorrow morning, 8 AM to noon. Your requested time of 5 PM is noted on the ticket. An agent will call you then.
+18:48:51.123 n_message  user       Okay. Thank you for the help.
+18:48:52.684 n_end__msg assistant  Thanks for calling Duinvezel. Goodbye.
+18:48:54.869 n_end      CALL       hangup {}
+```
+
+After `stop_transfer` the call took the Transfer node's default edge to Take message (`n_message`), and Take message booked the callback. The read-back ended at 18:48:46.708, and nobody spoke for 4.4 s until the caller did.
+
+**Cause.** Take message's instructions end with the read-back, and the base instructions tell the model never to say goodbye itself. So after the read-back it waits for the caller, and its one edge, to End call, fires on the caller's next turn. In `assistant/flow.ts` every way into Take message is the Transfer node's single default edge, so a transfer that fails for any other reason reaches the same instructions and has the same gap. Repair ticket's instructions end the same way. In the rehearsal the repair visit was booked from Verify (issue 23), and there the model asked on its own whether there was anything else.
+
+**Fix.** None before the review, because behaviour is frozen. After it, one line at the end of Take message's instructions, in `docs/WORKFLOW.md` and `assistant/instructions/take-message.md`, `- Then ask whether there is anything else you can help with.` Repair ticket would get the same line.
+
+**Design impact.** None yet. The README lists it as a known issue.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
