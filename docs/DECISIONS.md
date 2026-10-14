@@ -218,7 +218,7 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 
 ## ADR-021. A transfer briefs the engineer, waits for a yes and stops at voicemail
 
-**Status.** Accepted, 14 October, decided by Thiago. Untested until the calls after T29.
+**Status.** Rolled back on 14 October with T29, before any call tested it (DEBUGLOG issue 29). Thiago had accepted it earlier that day.
 
 **Evidence.** Telnyx's pages on warm transfer acceptance (https://developers.telnyx.com/docs/inference/ai-assistants/warm-transfer-acceptance.md) and on voicemail detection on transfer (https://developers.telnyx.com/docs/inference/ai-assistants/voicemail-detection-on-transfer.md), and the `TransferToolParams` schema in Telnyx's OpenAPI spec (https://raw.githubusercontent.com/team-telnyx/openapi/master/openapi/spec3.json), read on 14 October. DEBUGLOG issue 28.
 

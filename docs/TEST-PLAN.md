@@ -30,4 +30,4 @@ T28 was live. Before the calls Thiago ran the steps in the README's "Before a de
 
 - Path D, the repeat caller, was not run. Its transfer would ring the phone already on the call (DEBUGLOG issue 21).
 - Path H's second call did not show the lock, because the caller asked for a person first.
-- T29 changes the opening of every path and the transfer, so the calls after its provisioning and the final rehearsal on 15 October run the main paths again.
+- T29 was rolled back on the evening of 14 October (DEBUGLOG issue 29), so the opening and the transfer are T28's again. The final rehearsal on 15 October runs the main paths again.

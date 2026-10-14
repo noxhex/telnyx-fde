@@ -71,7 +71,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
 | T12 | Workflow content | T19 | done |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged run after T29's provisioning closes it |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged third run after the rollback's provisioning closes it |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
 | T22 | Calls that survive a replica's first use | T20 | done, shipped |
 | T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, provisioned |

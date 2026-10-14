@@ -692,9 +692,9 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Cause.** The question came from the model's turn after Route call. That turn waited for the disclosure webhook and then for the model's reply.
 
-**Fix.** Card T29. The disclosure line ends with the question, and Verify and Triage tell the model it has been asked and to wait for the answer.
+**Fix.** Card T29 ended the disclosure line with the question and told the model in Verify and Triage to wait for the answer. That failed on the first two calls, and T29 was rolled back the same evening (issue 29). The question is the model's first turn again, and the pause is a known issue in the README.
 
-**Design impact.** Every path now hears the question. On the outage path the outage notice follows it about 0.7 s later, on the repeat-caller path the Handoff line, and on the Degraded path the model's apology. The model still gets a turn after Route call. Before T25, with no line about the opening, it waited in the call at 06:27 and asked on its own in the call at 06:32, so the first call after T29 shows whether the new line holds.
+**Design impact.** None, since T29 was rolled back. The question could move into the disclosure only if the disclosure led straight to a prompt step, without Route call between them (issue 29).
 
 ## 28. The caller heard silence while the transfer rang
 
@@ -712,9 +712,9 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Cause.** The shared transfer tool set only `targets` and `from` (`scripts/provision/desired.ts`). Telnyx documents ringback for the caller only for a warm transfer with acceptance, where the caller stays with the assistant while it talks to the person who answered (ADR-021).
 
-**Fix.** Card T29 makes the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021). The Handoff line tells the caller to expect ringing.
+**Fix.** Card T29 made the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021), and told the caller to expect ringing. It was rolled back with the rest of T29 the same evening (issue 29), before any call tested the transfer, so the transfer is T28's plain one again.
 
-**Design impact.** ADR-021. Its settings are tested only once Thiago's calls after T29 go through.
+**Design impact.** ADR-021, rolled back with T29.
 
 ## 29. The model spoke before the caller could answer, and one call hung up
 
