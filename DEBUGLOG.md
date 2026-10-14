@@ -692,7 +692,7 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Cause.** The question came from the model's turn after Route call. That turn waited for the disclosure webhook and then for the model's reply.
 
-**Fix.** Card T29 ended the disclosure line with the question and told the model in Verify and Triage to wait for the answer. That failed on the first two calls, and T29 was rolled back the same evening (issue 29). The question is the model's first turn again, and the pause is a known issue in the README.
+**Fix.** Card T29 ended the disclosure line with the question and told the model in Verify and Triage to wait for the answer. That failed on the first two calls, and T29 was rolled back the same evening (issue 29). The question is the model's first turn again, so the pause remains.
 
 **Design impact.** None, since T29 was rolled back. The question could move into the disclosure only if the disclosure led straight to a prompt step, without Route call between them (issue 29).
 
@@ -768,7 +768,7 @@ The transcript gives that reply an end-user latency of 4,459 ms. voice-tools log
 
 **Cause.** The model takes a turn as soon as a step starts after a tool node (issue 24). T29 put the question into the disclosure and told the model in Verify and Triage to say nothing until the caller answered. That did not hold in either call. In call A the model moved on to the postcode, and in call B it spoke its reasoning as its reply and ended the call.
 
-**Fix.** Thiago asked the same evening to go back to T28, which had passed the rehearsal. Commit ba1f819 reverts T29's code and the lines that describe it in `docs/WORKFLOW.md` and `docs/ARCHITECTURE.md`. The question is again the model's first turn after Route call, and the pause before it is a known issue in the README. The transfer went back too, because its settings came with the same card and no call had tested them.
+**Fix.** Thiago asked the same evening to go back to T28, which had passed the rehearsal. Commit ba1f819 reverts T29's code and the lines that describe it in `docs/WORKFLOW.md` and `docs/ARCHITECTURE.md`. The question is again the model's first turn after Route call, and the pause before it remains (issue 27). The transfer went back too, because its settings came with the same card and no call had tested them.
 
 The provisioning script compares only the keys it sends (`scripts/provision/compare.ts`). Going back to a transfer with only `targets` and `from` therefore cannot remove keys that T29 added to the tool, and a read-back of the tool shows whether the API kept them. The portal shows none of these settings, so T30's provisioning clears them itself (ADR-021, the amendment for T30).
 
