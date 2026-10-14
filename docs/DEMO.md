@@ -1,7 +1,5 @@
 # Demo script
 
-Skeleton for the review session. Finalise it in T17 once every path works.
-
 ## Before the session
 
 - Raise or remove the daily inference spend cap, which also limits the assistant's own model calls.
@@ -17,11 +15,11 @@ Skeleton for the review session. Finalise it in T17 once every path works.
 |---|---|---|
 | 0:00 | The problem in one sentence, and the architecture diagram | Use case |
 | 0:30 | Call 1 from the demo phone, area 8630 quiet. Greeting by name, the disclosure, postcode verification, "my internet is down", diagnostics, an outage report counted as 1 of 3 | Dynamic variables, speak node, workflow steps, MCP calls, CustomerAccount and AreaIncident actors, the trace id in the live logs |
-| 3:30 | `scripts/demo.sh reports 8630 2`. The second simulated report crosses the threshold, and the area status changes in KV | Exactly-once declaration, the outbox publish, KV read model |
+| 3:30 | In terminal 3, read `area/8630/status` from KV, run `scripts/demo.sh reports 8630 2`, and read the key again about five seconds later. The second simulated report crosses the threshold, and the second read shows the outage in KV | Exactly-once declaration, the outbox publish, KV read model |
 | 5:00 | Call 2 from the same phone. It hears the outage notice seconds into the call, before saying anything | Variable routing on data, a speak node with variables |
 | 6:00 | `scripts/demo.sh reset`, then `scripts/demo.sh reports 8670 2`. Run them only when no reviewer call is in progress. Call 3 waits about 15 seconds after them, because the cleared status of 8630 reaches KV a few seconds after the reset and warm replicas keep area statuses for 10 seconds | A clean start for call 3. 8630 is out of outage, and the demo phone is not a repeat caller |
-| 6:30 | `scripts/demo.sh flags set crm_fail true`. Call 3 still greets him by name from the KV cache, but diagnostics fail, and the assistant says so and offers a person | Observability, feature flags without a redeploy, the cache absorbing a CRM outage, graceful degradation |
-| 8:00 | Restore the flag with `scripts/demo.sh flags set crm_fail false`. The reviewers call the number themselves as unknown callers, if they like | Unknown caller path |
+| 6:30 | `scripts/demo.sh flags set crm_fail true`. Call 3 still greets him by name from the KV cache, but diagnostics fail, and the assistant says so and offers a person. Decline it, because a transfer from the demo phone would ring the demo phone itself (DEBUGLOG issue 21) | Observability, feature flags without a redeploy, the cache absorbing a CRM outage, graceful degradation |
+| 8:00 | Restore the flag with `scripts/demo.sh flags set crm_fail false`. The reviewers call the number themselves as unknown callers, if they like. After a reviewer's report on 8670, the third there, `telnyx-edge storage kv key get "$NS" area/8670/status` shows the outage land in KV a few seconds later | Unknown caller path |
 
 **Answering a transfer.** When a transfer rings the demo phone, answer with a short "Hello" and then wait two or three seconds. Voicemail detection decides before it connects the call, and on 14 October the bridge came 1.7 s after the answer (DEBUGLOG issue 28).
 
@@ -39,8 +37,16 @@ telnyx-edge logs voice-tools --tail --type runtime --json \
   | jq -r --unbuffered '.message | fromjson? | select(.event == "mcp" and .method == "tools/call") | [.ts[11:19], .trace_id[0:12], .tool, .identity, .outcome, (.latency_ms | tostring)] | @tsv'
 
 # 3. Commands. At 3:30, two simulated reports on 8630 join call 1's own
-#    report, so call 2 hears the outage notice. Then the area actor's lines.
+#    report, so call 2 hears the outage notice. The actor publishes to KV
+#    through its outbox a few seconds after the report, so read the key
+#    once before the reports and again about five seconds after them.
+#    Between the two reads state goes from ok to outage, and incidentId
+#    and eta fill in, while the area actor's lines show the report and
+#    the publish.
+NS=$(jq -r .kvNamespaceId infra/ids.json)
+telnyx-edge storage kv key get "$NS" area/8630/status
 scripts/demo.sh reports 8630 2
+telnyx-edge storage kv key get "$NS" area/8630/status
 telnyx-edge actors logs AreaIncident --type runtime --since 5m
 scripts/demo.sh flags
 ```
