@@ -604,7 +604,73 @@ In the last call the transfer then failed (issue 21), and Take message asked for
 
 **Fix.** Card T27. The base instructions say each step uses only the tools it names, and Verify moves on as soon as the caller is verified. A request for a person goes to Handoff straight away, a callback is created only once the caller agrees, and the caller's time goes into the one `create_ticket` call.
 
+The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 live, the model again ran the line check and the report from Verify. Thiago chose to drop the rule rather than press harder, since no call has yet shown whether a step change between two prompt nodes leaves a pause (issue 24). Card T28 removes it and puts the outage rule into the base instructions, next to the ticket rules, so the rules that must hold apply in every step. A plainer rule in Verify is the next step after the review (README, Known issues).
+
 **Design impact.** ADR-020's consequences gain this evidence.
+
+## 24. The assistant went silent after the outage notice
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** In the rehearsal's path A call the outage notice played straight after the disclosure. Then the line stayed silent until the assistant asked whether Thiago's internet was down completely.
+
+**Evidence.** The transcript, times UTC. The `system` line is Telnyx's own.
+
+```text
+13:57:21.865 n_outage_notice assistant  There's a confirmed outage affecting Veurne. Our engineers are working on it, and we expect your service back by 19:56 today.
+13:57:38.361 -               system     [long silence]
+13:57:38.770 n_outage_help   assistant  Is your own internet down completely right now?
+```
+
+**Cause.** Outage notice is a speak node, and its default edge leads to the prompt node Outage help. The model got no turn when Outage help started, so it waited for the caller until Telnyx's silence prompt, 16.5 s after the notice began. A tool node does hand the model a turn. Route call does so before Verify in every call since T25, Transfer did before Take message (issue 21), and the tool node in S2 did too (S2 findings).
+
+**Fix.** Card T28. The notice's own line ends with the follow-up question, "Is that why you're calling, or is there something else I can help with?", so the caller's answer starts the model's turn.
+
+**Design impact.** A speak node followed by a prompt node must end with a question. Outage notice is the only one in the workflow.
+
+## 25. A misheard first request brought back the recording notice
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, speech recognition
+
+**Symptom.** In the rehearsal's path C call Thiago said his internet was down. The assistant answered that the call was recorded and asked again how it could help, so he had to repeat himself.
+
+**Evidence.** The transcript, times UTC.
+
+```text
+13:53:16.133 n_verify assistant  How can I help you today, Thiago?
+13:53:20.538 n_verify user       Uh, it looks recorded in Internet phone.
+13:53:23.194 n_verify assistant  I understand. Yes, this call is recorded for quality and training purposes. That's standard for our support line. How can I help you today, Thiago?
+```
+
+**Cause.** Speech recognition turned the first request into words about recording, and the model answered those words. It happened in Verify before any tool call or step change, so it does not come from T27. The opening question also repeated the name the disclosure had just used, as T25 wrote it.
+
+**Fix.** Card T28. The base instructions say never to repeat the recording notice or the opening question, to act on the caller's first request, and to ask only about a part that was unclear. The opening question no longer uses the name.
+
+**Design impact.** None.
+
+## 26. A demo report answered 503 although every report landed
+
+**Date** 14 Oct 2026 · **Area** Demo tooling, actors
+
+**Symptom.** In the rehearsal `scripts/demo.sh reports 8630 3` answered 503 with `report_unavailable`.
+
+**Evidence.** Times UTC.
+
+```text
+# telnyx-edge actors logs AreaIncident, trimmed
+[2026-10-14T13:56:39.312Z] {"method":"report","area":"8630","outcome":"counted","reports_in_window":2,"threshold":3}
+[2026-10-14T13:56:39.615Z] {"method":"report","area":"8630","outcome":"declared","reports_in_window":3,"threshold":3}
+[2026-10-14T13:56:42.207Z] {"event":"publish","area":"8630","version":3,"latency_ms":{"total":2565,"kv":2565}}
+[2026-10-14T13:56:42.264Z] {"method":"report","area":"8630","outcome":"counted","reports_in_window":4,"threshold":3}
+# telnyx-edge logs voice-tools --type runtime, trimmed
+[2026-10-14T13:56:41.661Z] {"event":"internal_demo","route":"reports","outcome":"report_unavailable","status":503,"latency_ms":{"total":2554,"actor":2553}}
+```
+
+**Cause.** Thiago's own report in the call before was the first, so the second simulated report declared the incident. The actor's alarm then wrote the new status to KV, which took 2.6 s. An actor runs one call at a time, so the third simulated report waited behind that write, and the route's bound of 2,000 ms per report (`demoReportMs` in `functions/voice-tools/src/config.ts`) ran out. The report itself landed 0.6 s later.
+
+**Fix.** None before the review. After a caller's own report, `reports 8630 2` is enough, so the report that declares the incident is the last one sent. When the route answers 503, the `AreaIncident` log shows what landed.
+
+**Design impact.** The demo route's bound does not cover an alarm queued on the same actor.
 
 ## S1 measurements
 

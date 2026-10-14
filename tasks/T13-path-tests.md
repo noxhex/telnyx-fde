@@ -24,7 +24,7 @@ All the unknown-caller calls are browser calls, never from `DEMO_CALLER_PHONE`. 
 | Who calls | Account | Path in `docs/WORKFLOW.md` | What it should show |
 |---|---|---|---|
 | Thiago | DV-100001, his own | C, number match | Greeting by name, postcode check, diagnostics find the line down, outage report |
-| Thiago | DV-100001 | A, outage in his area, after `reports 8630 3` | Outage notice at the start, Outage help |
+| Thiago | DV-100001 | A, outage in his area, after `reports 8630 2`, or 3 if his first call made no report | Outage notice at the start, Outage help |
 | Browser | Lotte, DV-100004, 8620 | B, unknown caller, healthy line | Full verification, diagnostics find no fault |
 | Browser | Wout, DV-100005, 8660 | B, line fault | Full verification, diagnostics find a fault, repair ticket with a visit window |
 | Browser | Anke, DV-100006, 8670 | I, threshold crossing | Her report is the third, the incident is declared once, and the next caller in 8670 hears the outage notice |

@@ -40,6 +40,15 @@ Thiago's runbook wraps steps 2 and 3 as `t10_smoke` and `t10_inspector`. It live
 
 The warm-up only reaches the replicas that answer it. mock-crm served eight requests from four replicas on 13 October, so a reviewer's call can still meet a fresh one. That call is the case T22 covers.
 
+## Known issues
+
+These are what a caller can still run into, each with the fix designed for it.
+
+- **The model works from Verify.** Every prompt step sees all five MCP tools (ADR-020). After verification the model runs the line check, outage reports and tickets from Verify instead of moving on to Triage and Diagnose. T27 told it to move on and the next call ignored that, so T28 put the rules that must hold into the base instructions instead (DEBUGLOG issue 23). The next step is a plainer rule in Verify that those actions belong to later steps, once a call shows that a step change between two prompt steps leaves no pause.
+- **mock-crm can run out of replicas.** On 14 October, after almost six hours without a request, the next lookup waited about 20 s for a new replica. A known caller was greeted as unknown and asked for the full verification (DEBUGLOG issue 22). The warm-up starts a replica, so it runs again just before a demo. The canary below would keep one up all the time.
+- **Slow KV can hide an outage notice.** `/dv` reads the five area statuses from KV, behind a 10-second memory cache. On 14 October those reads took about 2 s. A caller whose area read runs past its 2,500 ms limit gets no outage notice. The fix keeps each replica's last good status per area and uses it when a fresh read runs out, the way the flags have worked since T20.
+- **A withheld number gets no callback.** A callback request from a withheld number stores no number to call. The fix has Take message ask for one when the caller's number is unknown. On 14 October `#31#` did not withhold Thiago's number, so the withheld-caller path is covered only by tests.
+
 ## Next step, a canary
 
 Nothing watches the assistant between calls yet. The next step is a `Canary` actor in voice-tools.
