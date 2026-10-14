@@ -291,7 +291,9 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     to: "n_end",
     condition: {
       kind: "llm",
-      prompt: "The caller only wanted to know whether there is an outage at a postcode, and has their answer.",
+      prompt:
+        "The caller only wanted to know whether there is an outage at a postcode and has their answer, " +
+        "or wants to end the call.",
     },
   },
   {
@@ -329,7 +331,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_outage_help_end",
     from: "n_outage_help",
     to: "n_end",
-    condition: { kind: "llm", prompt: "The caller has what they need and is ready to end the call." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller has nothing more to ask, or wants to end the call.",
+    },
   },
   // Triage
   {
@@ -359,7 +364,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_triage_end",
     from: "n_triage",
     to: "n_end",
-    condition: { kind: "llm", prompt: "The caller's question is answered and they are ready to end the call." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller has nothing more to ask, or wants to end the call.",
+    },
   },
   // Diagnose
   {
@@ -394,7 +402,7 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     to: "n_end",
     condition: {
       kind: "llm",
-      prompt: "The problem is fixed or explained and the caller is ready to end the call.",
+      prompt: "The caller has nothing more to ask, or wants to end the call.",
     },
   },
   {
@@ -410,7 +418,7 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     to: "n_end",
     condition: {
       kind: "llm",
-      prompt: "The ticket is created and read back, and the caller is ready to end the call.",
+      prompt: "The caller has nothing more to ask, or wants to end the call.",
     },
   },
   {
@@ -428,7 +436,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_message_end",
     from: "n_message",
     to: "n_end",
-    condition: { kind: "llm", prompt: "The callback request is recorded and read back." },
+    condition: {
+      kind: "llm",
+      prompt: "The callback request is recorded and read back, or the caller wants to end the call.",
+    },
   },
   // Degraded
   {

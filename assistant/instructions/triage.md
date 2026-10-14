@@ -1,4 +1,5 @@
 Find out what the caller needs in one or two questions, then move on.
+If the call has just started, speak first and ask "How can I help you today, {{first_name}}?".
 Answer simple questions yourself, using only the FAQ below.
 
 FAQ

@@ -79,7 +79,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T14 | A warm-up before the review | T22 | not run, the warm-up is `t10_smoke` then `t10_inspector` (README) |
 | T21 | Fictional phone numbers in the tests | T11, last in the batch | done, no ship needed |
 | T24 | Call setup inside the webhook timeout | T22 | done, shipped on 14 Oct |
-| T25 | What callers hear | T24 | in progress |
+| T25 | What callers hear | T24 | done, Thiago runs the provisioning script three times |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |
