@@ -16,6 +16,7 @@ import {
   matchConversationFlow,
   matchGreeting,
   matchToolIds,
+  matchTransfer,
   matchValue,
   recordingIsOn,
   telephonySettingsWithRecordingOn,
@@ -150,6 +151,56 @@ describe("diffTool", () => {
     expect(diffTool(desired, { ...asRead, timeout_ms: 10000 })).toEqual(["timeout_ms"]);
     expect(diffTool(desired, { ...asRead, display_name: "other" })).toEqual(["display_name"]);
     expect(diffTool(desired, { ...asRead, tool_definition: undefined })).toEqual(["transfer"]);
+  });
+
+  it("applies the brief rule to the transfer tool only", () => {
+    const leftover = { ...desired.transfer, warm_transfer_instructions: "Left from T29." };
+    expect(diffTool(desired, { ...asRead, tool_definition: leftover })).toEqual(["transfer"]);
+    const hangup = { display_name: "duinvezel-hangup", type: "hangup", timeout_ms: 5000, hangup: {} };
+    const hangupRead = { ...hangup, id: "tool-3", tool_definition: { warm_transfer_instructions: "Left." } };
+    expect(diffTool(hangup, hangupRead)).toEqual([]);
+  });
+});
+
+describe("matchTransfer", () => {
+  const sent = {
+    targets: [{ name: "Duinvezel support engineer", to: "+3258000130" }],
+    from: "+12025550143",
+    voicemail_detection: { detection_mode: "premium", on_voicemail_detected: { action: "stop_transfer" } },
+    warm_transfer_acceptance: { enabled: false },
+    warm_transfer_instructions: "",
+  };
+  const withoutBrief: Record<string, unknown> = { ...sent };
+  delete withoutBrief["warm_transfer_instructions"];
+
+  it("counts an empty, null or missing brief as the empty brief it sent", () => {
+    expect(matchTransfer(sent, sent)).toBe(true);
+    expect(matchTransfer(sent, { ...sent, warm_transfer_instructions: null })).toBe(true);
+    expect(matchTransfer(sent, withoutBrief)).toBe(true);
+  });
+
+  it("counts any brief text left on the tool as a difference, down to one space", () => {
+    expect(matchTransfer(sent, { ...sent, warm_transfer_instructions: "Tell the engineer what is needed." })).toBe(false);
+    expect(matchTransfer(sent, { ...sent, warm_transfer_instructions: " " })).toBe(false);
+  });
+
+  it("treats a body without a brief like one that sends the empty string", () => {
+    expect(matchTransfer(withoutBrief, sent)).toBe(true);
+    expect(matchTransfer(withoutBrief, { ...sent, warm_transfer_instructions: null })).toBe(true);
+    expect(matchTransfer(withoutBrief, { ...sent, warm_transfer_instructions: "Left from T29." })).toBe(false);
+  });
+
+  it("compares a brief sent as text exactly", () => {
+    const withText = { ...sent, warm_transfer_instructions: "Brief the engineer." };
+    expect(matchTransfer(withText, withText)).toBe(true);
+    expect(matchTransfer(withText, sent)).toBe(false);
+  });
+
+  it("matches the other keys as a subset, as matchValue does", () => {
+    expect(matchTransfer(sent, { ...sent, warm_message_delay_ms: 0 })).toBe(true);
+    expect(matchTransfer(sent, { ...sent, warm_transfer_acceptance: { enabled: true } })).toBe(false);
+    expect(matchTransfer(sent, { ...sent, from: "+12025550999" })).toBe(false);
+    expect(matchTransfer(sent, undefined)).toBe(false);
   });
 });
 

@@ -84,6 +84,12 @@ export type SharedToolDesired = {
  * `body_parameters` asks the model for nothing
  * (https://developers.telnyx.com/docs/inference/ai-assistants/preset-webhook-parameters).
  * Preset body fields are dropped on `GET` tools; this one is a `POST`.
+ * The transfer stops at voicemail (`voicemail_detection` with
+ * `stop_transfer`), and its acceptance is sent switched off rather than left
+ * out, because the script compares only the keys it sends (ADR-021,
+ * DEBUGLOG issue 29). The brief goes out as the empty string to clear the
+ * one T29 left: Telnyx documents neither whether an update replaces a
+ * tool's definition or merges into it, nor a value that removes a field.
  */
 export function sharedToolBodies(input: {
   voiceContextUrl: string;
@@ -121,6 +127,12 @@ export function sharedToolBodies(input: {
         transfer: {
           targets: [{ name: "Duinvezel support engineer", to: input.transferTo }],
           from: input.phoneNumber,
+          voicemail_detection: {
+            detection_mode: "premium",
+            on_voicemail_detected: { action: "stop_transfer" },
+          },
+          warm_transfer_acceptance: { enabled: false },
+          warm_transfer_instructions: "",
         },
       },
     },

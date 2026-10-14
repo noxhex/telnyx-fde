@@ -10,7 +10,7 @@ import { buildConversationFlow } from "../../assistant/flow.ts";
 import type { FlowEdge, Instructions, ToolIds } from "../../assistant/flow.ts";
 import { loadInstructions } from "../../assistant/instructions.ts";
 import { ManualTimeouts } from "./manual-timeout.ts";
-import { FakeApi, makeDeps } from "./fake-api.ts";
+import { FakeApi, PHONE_NUMBER, TRANSFER_TO, makeDeps } from "./fake-api.ts";
 import type { ProvisionDeps } from "../provision/run.ts";
 import { provision } from "../provision/run.ts";
 
@@ -298,6 +298,122 @@ describe("the state the T11 run left", () => {
       "ids infra/ids.json: unchanged",
     ]);
     expect(deps.written).toHaveLength(0);
+  });
+});
+
+describe("the transfer shapes T28 and T29 left", () => {
+  /* T28 sent only `targets` and `from`. T29 added warm transfer
+   * instructions, acceptance switched on, and voicemail detection before it
+   * was rolled back; T30 brings the detection back with acceptance sent
+   * switched off (ADR-021, DEBUGLOG issue 29). */
+  const T28_TRANSFER = {
+    targets: [{ name: "Duinvezel support engineer", to: TRANSFER_TO }],
+    from: PHONE_NUMBER,
+  };
+  const VOICEMAIL_DETECTION = {
+    detection_mode: "premium",
+    on_voicemail_detected: { action: "stop_transfer" },
+  };
+  const T29_TRANSFER = {
+    ...T28_TRANSFER,
+    warm_transfer_instructions: "A Duinvezel support call is coming your way.",
+    warm_transfer_acceptance: { enabled: true },
+    voicemail_detection: VOICEMAIL_DETECTION,
+  };
+  const EXPECTED_TRANSFER = {
+    ...T28_TRANSFER,
+    voicemail_detection: VOICEMAIL_DETECTION,
+    warm_transfer_acceptance: { enabled: false },
+    warm_transfer_instructions: "",
+  };
+
+  /** Runs a first provision, rewinds the stored transfer tool to the given `transfer` object, returns the ids file. */
+  async function firstRun(api: FakeApi, transfer: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const first = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
+    await provision(first);
+    const stored = api.tools.find((tool) => tool.body["display_name"] === "duinvezel-transfer");
+    if (stored === undefined) {
+      throw new Error("the first run created no transfer tool");
+    }
+    stored.body = { display_name: "duinvezel-transfer", type: "transfer", timeout_ms: 5000, transfer };
+    return JSON.parse(first.written[0] ?? "{}") as Record<string, unknown>;
+  }
+
+  const ALL_UNCHANGED = [
+    "secret mcp_enc_key: present",
+    "tool duinvezel-log-disclosure (tool-0001-uuid): unchanged",
+    "tool duinvezel-transfer (tool-0002-uuid): unchanged",
+    "tool duinvezel-hangup (tool-0003-uuid): unchanged",
+    "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
+    "assistant Duinvezel Support (assistant-0001-uuid): unchanged",
+    "phone_number ...0143 (pn-0001): unchanged",
+    "ids infra/ids.json: unchanged",
+  ];
+
+  /** The update run sends one PATCH with the new transfer; the run after it sends only GETs. */
+  async function expectUpdateThenUnchanged(transfer: Record<string, unknown>): Promise<void> {
+    const api = new FakeApi();
+    const idsFile = await firstRun(api, transfer);
+
+    const before = api.requests.length;
+    const second = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(second);
+    const requests = api.requests.slice(before);
+
+    const writes = requests.filter((r) => r.method !== "GET");
+    expect(writes.map((r) => `${r.method} ${r.path}`)).toEqual(["PATCH /ai/tools/tool-0002-uuid"]);
+    expect((writes[0]?.body as Record<string, unknown>)["transfer"]).toEqual(EXPECTED_TRANSFER);
+    expect(second.lines).toEqual([
+      "secret mcp_enc_key: present",
+      "tool duinvezel-log-disclosure (tool-0001-uuid): unchanged",
+      "tool duinvezel-transfer (tool-0002-uuid): updated (transfer)",
+      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
+      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
+      "assistant Duinvezel Support (assistant-0001-uuid): unchanged",
+      "phone_number ...0143 (pn-0001): unchanged",
+      "ids infra/ids.json: unchanged",
+    ]);
+
+    const beforeThird = api.requests.length;
+    const third = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(third);
+    expect(api.requests.slice(beforeThird).every((r) => r.method === "GET")).toBe(true);
+    expect(third.lines).toEqual(ALL_UNCHANGED);
+    expect(third.written).toHaveLength(0);
+  }
+
+  it("updates T28's targets-and-from body to the voicemail-detection body", async () => {
+    await expectUpdateThenUnchanged(T28_TRANSFER);
+  });
+
+  it("updates T29's warm-transfer body, keeping detection and sending acceptance off", async () => {
+    await expectUpdateThenUnchanged(T29_TRANSFER);
+  });
+
+  /** A run against a transfer stored in the given shape prints unchanged everywhere and sends only GETs. */
+  async function expectUnchanged(transfer: Record<string, unknown>): Promise<void> {
+    const api = new FakeApi();
+    const idsFile = await firstRun(api, transfer);
+    const before = api.requests.length;
+    const run = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
+    await provision(run);
+    expect(api.requests.slice(before).every((r) => r.method === "GET")).toBe(true);
+    expect(run.lines).toEqual(ALL_UNCHANGED);
+    expect(run.written).toHaveLength(0);
+  }
+
+  it("reads a brief stored as null, or left out, as the empty brief it sent", async () => {
+    await expectUnchanged({ ...EXPECTED_TRANSFER, warm_transfer_instructions: null });
+    const withoutBrief: Record<string, unknown> = { ...EXPECTED_TRANSFER };
+    delete withoutBrief["warm_transfer_instructions"];
+    await expectUnchanged(withoutBrief);
+  });
+
+  it("counts a brief still on the live tool as a difference, so a rerun cannot say unchanged", async () => {
+    await expectUpdateThenUnchanged({
+      ...EXPECTED_TRANSFER,
+      warm_transfer_instructions: "A Duinvezel support call is coming your way.",
+    });
   });
 });
 

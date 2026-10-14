@@ -151,8 +151,30 @@ export function diffAssistant(desired: JsonObject, actual: JsonObject): string[]
 }
 
 /**
+ * The transfer tool's `transfer` object. Every key the script sends matches
+ * as in `matchValue`, except the brief. The script sends
+ * `warm_transfer_instructions` as the empty string, and a read-back of `""`,
+ * `null` or no brief at all counts as equal. Any other text is a brief left
+ * on the live tool, such as T29's, and counts as a difference, which the
+ * subset rule alone would ignore (ADR-021, DEBUGLOG issue 29).
+ */
+export function matchTransfer(expected: unknown, actual: unknown): boolean {
+  if (!isJsonObject(expected) || !isJsonObject(actual)) {
+    return matchValue(expected, actual);
+  }
+  const { warm_transfer_instructions: expectedBrief = "", ...rest } = expected;
+  const actualBrief = actual["warm_transfer_instructions"];
+  const briefMatches =
+    expectedBrief === ""
+      ? actualBrief === "" || actualBrief === null || actualBrief === undefined
+      : matchValue(expectedBrief, actualBrief);
+  return briefMatches && matchValue(rest, actual);
+}
+
+/**
  * The managed fields of a shared tool; the `<type>` object is compared with
- * `tool_definition`. `preset_body_fields` is a managed field of the
+ * `tool_definition`, the transfer's with `matchTransfer`.
+ * `preset_body_fields` is a managed field of the
  * disclosure tool like the rest of its `webhook` object: it sits inside that
  * object, so this same comparison covers it, and an old read-back without a
  * preset differs.
@@ -165,7 +187,8 @@ export function diffTool(desired: JsonObject, actual: JsonObject): string[] {
     }
   }
   const type = desired["type"];
-  if (typeof type === "string" && !matchValue(desired[type], actual["tool_definition"])) {
+  const match = type === "transfer" ? matchTransfer : matchValue;
+  if (typeof type === "string" && !match(desired[type], actual["tool_definition"])) {
     changed.push(type);
   }
   return changed;

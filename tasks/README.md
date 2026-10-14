@@ -84,7 +84,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T27 | Transfer first, and each step keeps to its tools | T25 | done, T28 drops its tool-scope rule |
 | T28 | One name in the opening, no repeats, no pause after the outage notice | T27 | done, provisioned on 14 Oct |
 | T29 | The opening question in the disclosure, and a warm transfer | T28 | rolled back on 14 Oct (DEBUGLOG issue 29) |
-| T30 | The Handoff line and voicemail detection on the transfer | T28 | ready |
+| T30 | The Handoff line and voicemail detection on the transfer | T28 | done, Thiago runs the provisioning script three times |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | in progress, no agent code. The evening rehearsal of 14 Oct is in `docs/TEST-PLAN.md` |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |
