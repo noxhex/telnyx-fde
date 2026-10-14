@@ -300,7 +300,12 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_verify_handoff",
     from: "n_verify",
     to: "n_handoff",
-    condition: { kind: "llm", prompt: "The caller cannot verify, is locked out, or asks for a person." },
+    condition: {
+      kind: "llm",
+      prompt:
+        "The caller cannot verify, is locked out, or asks to talk to a person, " +
+        "such as an engineer or an agent.",
+    },
   },
   // Outage notice
   {
@@ -325,7 +330,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_outage_help_handoff",
     from: "n_outage_help",
     to: "n_handoff",
-    condition: { kind: "llm", prompt: "The caller asks for a person." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller asks to talk to a person, such as an engineer or an agent.",
+    },
   },
   {
     id: "e_outage_help_end",
@@ -341,7 +349,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_triage_diagnose",
     from: "n_triage",
     to: "n_diagnose",
-    condition: { kind: "llm", prompt: "The caller's internet is down, slow or unstable." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller's internet is down, slow or unstable, or they ask for a line check.",
+    },
   },
   {
     id: "e_triage_ticket",
@@ -358,7 +369,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_triage_handoff",
     from: "n_triage",
     to: "n_handoff",
-    condition: { kind: "llm", prompt: "The caller asks for a person." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller asks to talk to a person, such as an engineer or an agent.",
+    },
   },
   {
     id: "e_triage_end",
@@ -409,7 +423,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_diagnose_handoff",
     from: "n_diagnose",
     to: "n_handoff",
-    condition: { kind: "llm", prompt: "The caller asks for a person." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller asks to talk to a person, such as an engineer or an agent.",
+    },
   },
   // Repair ticket
   {
@@ -425,7 +442,10 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     id: "e_ticket_handoff",
     from: "n_ticket",
     to: "n_handoff",
-    condition: { kind: "llm", prompt: "The caller asks for a person." },
+    condition: {
+      kind: "llm",
+      prompt: "The caller asks to talk to a person, such as an engineer or an agent.",
+    },
   },
   // Handoff
   { id: "e_handoff_default", from: "n_handoff", to: "n_transfer", condition: { kind: "default" } },
@@ -438,7 +458,9 @@ export const edgeDefinitions: readonly EdgeDef[] = [
     to: "n_end",
     condition: {
       kind: "llm",
-      prompt: "The callback request is recorded and read back, or the caller wants to end the call.",
+      prompt:
+        "The callback request is recorded and read back, the caller does not want one, " +
+        "or the caller wants to end the call.",
     },
   },
   // Degraded

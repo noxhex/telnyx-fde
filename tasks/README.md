@@ -81,7 +81,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T24 | Call setup inside the webhook timeout | T22 | done, shipped on 14 Oct |
 | T25 | What callers hear | T24 | done, provisioned on 14 Oct |
 | T26 | What the voice-tools tools tell the model | T24, T25 | done, shipped on 14 Oct |
-| T27 | Transfer first, and each step keeps to its tools | T25 | in progress |
+| T27 | Transfer first, and each step keeps to its tools | T25 | done, Thiago runs the provisioning script three times |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |
