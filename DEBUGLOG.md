@@ -519,7 +519,7 @@ The route checks the Telnyx signature first and answers 403 when it fails (`func
 ```
 
 - In both calls the five area reads ran into their 2,000 ms bound. The KV probe's put took about 2.3 to 2.5 s and its get ran out at 1.5 s, about twice the times of 13 October.
-- A fresh replica's secret reads cost the second call 890 ms. voice-tools' token key read on a fresh replica ran past its 1,000 ms bound, and Telnyx opened the MCP session again four seconds later. The first call's transcript has the caller speaking from 06:27:54.7, so the session was back before they finished. The silence after the disclosure came from the instructions, which T25 changed, and not from the 503.
+- A fresh replica's secret reads cost the second call 890 ms. voice-tools' token key read on a fresh replica ran past its 1,000 ms bound, and Telnyx opened the MCP session again four seconds later. The first call's transcript has the caller speaking from 06:27:54.7, 0.3 s after the 503. Telnyx opened the session again as their sentence ended, which may have added about half a second to the reply. The silence after the disclosure came from the instructions, which T25 changed, and not from the 503.
 
 **Cause.** Three gaps in `/dv`.
 

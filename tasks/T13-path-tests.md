@@ -19,18 +19,18 @@ This replaces the T13 outline in `tasks/later.md`.
 
 ## The calls
 
-All the unknown-caller calls come from a second phone, never from `DEMO_CALLER_PHONE`.
+All the unknown-caller calls are browser calls, never from `DEMO_CALLER_PHONE`. Thiago has no second phone, and on 14 October `#31#` did not withhold his number, so a call from his phone is always looked up.
 
 | Who calls | Account | Path in `docs/WORKFLOW.md` | What it should show |
 |---|---|---|---|
 | Thiago | DV-100001, his own | C, number match | Greeting by name, postcode check, diagnostics find the line down, outage report |
 | Thiago | DV-100001 | A, outage in his area, after `reports 8630 3` | Outage notice at the start, Outage help |
-| Second phone | Lotte, DV-100004, 8620 | B, unknown caller, healthy line | Full verification, diagnostics find no fault |
-| Second phone | Wout, DV-100005, 8660 | B, line fault | Full verification, diagnostics find a fault, repair ticket with a visit window |
-| Second phone | Anke, DV-100006, 8670 | I, threshold crossing | Her report is the third, the incident is declared once, and the next caller in 8670 hears the outage notice |
-| Second phone | Geert, DV-100007, 8600 | H, lockout, then the transfer | Three wrong postcodes lock the account, Handoff transfers the call to Thiago's mobile, and a second call is still locked |
+| Browser | Lotte, DV-100004, 8620 | B, unknown caller, healthy line | Full verification, diagnostics find no fault |
+| Browser | Wout, DV-100005, 8660 | B, line fault | Full verification, diagnostics find a fault, repair ticket with a visit window |
+| Browser | Anke, DV-100006, 8670 | I, threshold crossing | Her report is the third, the incident is declared once, and the next caller in 8670 hears the outage notice |
+| Browser | Geert, DV-100007, 8600 | H, lockout, then the transfer | Three wrong postcodes lock the account, Handoff transfers the call to Thiago's mobile, and a second call is still locked |
 
-Path D, the repeat caller, comes free on Thiago's third call within 24 hours. Run `reset` before review day so it does not.
+Path D, the repeat caller, comes free on Thiago's third call within 24 hours. Run `reset` before review day so it does not. Its transfer would ring the phone already on the call, so it cannot reach a person (DEBUGLOG issue 21). Transfers are tested from the browser, and they need the outbound voice profile in the README's Manual setup.
 
 ## Evidence for each call
 
