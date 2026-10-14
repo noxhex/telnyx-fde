@@ -23,6 +23,8 @@ Skeleton for the review session. Finalise it in T17 once every path works.
 | 6:30 | `scripts/demo.sh flags set crm_fail true`. Call 3 still greets him by name from the KV cache, but diagnostics fail, and the assistant says so and offers a person | Observability, feature flags without a redeploy, the cache absorbing a CRM outage, graceful degradation |
 | 8:00 | Restore the flag with `scripts/demo.sh flags set crm_fail false`. The reviewers call the number themselves as unknown callers, if they like | Unknown caller path |
 
+**Answering a transfer.** When a transfer rings the demo phone, answer with a short "Hello" and then wait two or three seconds. Voicemail detection decides before it connects the call, and on 14 October the bridge came 1.7 s after the answer (DEBUGLOG issue 28).
+
 ## Live observability on screen
 
 Three terminals, side by side. The first two stay attached for the whole demo.
@@ -36,11 +38,14 @@ telnyx-edge logs voice-context --tail --type runtime --json \
 telnyx-edge logs voice-tools --tail --type runtime --json \
   | jq -r --unbuffered '.message | fromjson? | select(.event == "mcp" and .method == "tools/call") | [.ts[11:19], .trace_id[0:12], .tool, .identity, .outcome, (.latency_ms | tostring)] | @tsv'
 
-# 3. Commands, and the area actor's lines after the simulated reports
+# 3. Commands. At 3:30, two simulated reports on 8630 join call 1's own
+#    report, so call 2 hears the outage notice. Then the area actor's lines.
 scripts/demo.sh reports 8630 2
 telnyx-edge actors logs AreaIncident --type runtime --since 5m
 scripts/demo.sh flags
 ```
+
+The reports on 8630 are for call 2, in the demo phone's own area. The two reports on 8670, before the session and again at 6:00, are for the reviewers' calls.
 
 The live tail drops its connection about every 10 minutes and reconnects by itself. Lines written during the gap do not show, so a missing line is in `telnyx-edge logs <function> --since 5m`.
 
