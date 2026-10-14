@@ -10,7 +10,7 @@ import { buildConversationFlow } from "../../assistant/flow.ts";
 import type { FlowEdge, Instructions, ToolIds } from "../../assistant/flow.ts";
 import { loadInstructions } from "../../assistant/instructions.ts";
 import { ManualTimeouts } from "./manual-timeout.ts";
-import { FakeApi, PHONE_NUMBER, TRANSFER_TO, makeDeps } from "./fake-api.ts";
+import { FakeApi, makeDeps } from "./fake-api.ts";
 import type { ProvisionDeps } from "../provision/run.ts";
 import { provision } from "../provision/run.ts";
 
@@ -298,88 +298,6 @@ describe("the state the T11 run left", () => {
       "ids infra/ids.json: unchanged",
     ]);
     expect(deps.written).toHaveLength(0);
-  });
-});
-
-describe("the state the runs before T29 left", () => {
-  /* Before T29 the transfer tool's `transfer` object held only `targets` and
-   * `from`: a blind transfer with no engineer acceptance and no voicemail
-   * detection (ADR-021, DEBUGLOG issues 27 and 28). */
-  function rewindTransferToPreT29(api: FakeApi): void {
-    const transfer = api.tools.find((tool) => tool.body["display_name"] === "duinvezel-transfer");
-    if (transfer === undefined) {
-      throw new Error("the first run created no transfer tool");
-    }
-    transfer.body = {
-      display_name: "duinvezel-transfer",
-      type: "transfer",
-      timeout_ms: 5000,
-      transfer: {
-        targets: [{ name: "Duinvezel support engineer", to: TRANSFER_TO }],
-        from: PHONE_NUMBER,
-      },
-    };
-  }
-
-  it("a real run updates the transfer to the warm transfer, and the run after prints unchanged everywhere", async () => {
-    const api = new FakeApi();
-    const first = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner });
-    await provision(first);
-    const idsFile = JSON.parse(first.written[0] ?? "{}") as Record<string, unknown>;
-    rewindTransferToPreT29(api);
-
-    const before = api.requests.length;
-    const second = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
-    await provision(second);
-    const requests = api.requests.slice(before);
-
-    expect(requests.filter((r) => r.method !== "GET").map((r) => `${r.method} ${r.path}`)).toEqual([
-      "PATCH /ai/tools/tool-0002-uuid",
-    ]);
-    expect(second.lines).toEqual([
-      "secret mcp_enc_key: present",
-      "tool duinvezel-log-disclosure (tool-0001-uuid): unchanged",
-      "tool duinvezel-transfer (tool-0002-uuid): updated (transfer)",
-      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
-      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
-      "assistant Duinvezel Support (assistant-0001-uuid): unchanged",
-      "phone_number ...0143 (pn-0001): unchanged",
-      "ids infra/ids.json: unchanged",
-    ]);
-
-    const patch = requests.find((r) => r.method === "PATCH")?.body as Record<string, unknown>;
-    expect(patch["transfer"]).toEqual({
-      targets: [{ name: "Duinvezel support engineer", to: TRANSFER_TO }],
-      from: PHONE_NUMBER,
-      warm_transfer_instructions:
-        "Tell the engineer in one or two short sentences what the customer needs " +
-        "and what has been done on this call, such as verification, a line check or a ticket. " +
-        "Give the customer's first name only if they were verified, " +
-        "and never read out a full account number. " +
-        "Then ask whether they can take the call now.",
-      warm_transfer_acceptance: { enabled: true },
-      voicemail_detection: {
-        detection_mode: "premium",
-        on_voicemail_detected: { action: "stop_transfer" },
-      },
-    });
-
-    const beforeThird = api.requests.length;
-    const third = makeDeps({ api, timeoutRunner: new ManualTimeouts().runner, overrides: { idsFile } });
-    await provision(third);
-
-    expect(api.requests.slice(beforeThird).every((r) => r.method === "GET")).toBe(true);
-    expect(third.lines).toEqual([
-      "secret mcp_enc_key: present",
-      "tool duinvezel-log-disclosure (tool-0001-uuid): unchanged",
-      "tool duinvezel-transfer (tool-0002-uuid): unchanged",
-      "tool duinvezel-hangup (tool-0003-uuid): unchanged",
-      "mcp_server duinvezel-voice-tools (mcp-server-0001-uuid): unchanged",
-      "assistant Duinvezel Support (assistant-0001-uuid): unchanged",
-      "phone_number ...0143 (pn-0001): unchanged",
-      "ids infra/ids.json: unchanged",
-    ]);
-    expect(third.written).toHaveLength(0);
   });
 });
 

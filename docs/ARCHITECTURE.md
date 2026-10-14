@@ -198,7 +198,7 @@ The two token keys, the flags, the CRM lookup and the five area statuses start t
 | KV publish from the actor fails | The incident is still recorded, and the actor's alarm retries the publish | `publish_retry` log line, canary area check |
 | Actor call fails at call setup | No repeat-caller flag, and the call continues normally | `actor_error` field in the `dv` log |
 | `Session.create` fails at call setup | The variables still carry the greeting and the outage notice, but the MCP tools answer 401 for that call. The prompts admit missing tools and offer a person | `session_error` or `session_timeout` in the `dv` log reasons |
-| Transfer fails, is declined or reaches voicemail | The caller comes back to the assistant, and the Take message node records a callback request (ADR-021) | Transfer tool result in the transcript |
+| Transfer fails | The Take message node records a callback request | Transfer tool status in the transcript |
 
 ## Observability
 

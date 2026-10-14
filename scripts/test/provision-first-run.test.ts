@@ -258,17 +258,6 @@ describe("the payloads the script sends", () => {
       transfer: {
         targets: [{ name: "Duinvezel support engineer", to: TRANSFER_TO }],
         from: PHONE_NUMBER,
-        warm_transfer_instructions:
-          "Tell the engineer in one or two short sentences what the customer needs " +
-          "and what has been done on this call, such as verification, a line check or a ticket. " +
-          "Give the customer's first name only if they were verified, " +
-          "and never read out a full account number. " +
-          "Then ask whether they can take the call now.",
-        warm_transfer_acceptance: { enabled: true },
-        voicemail_detection: {
-          detection_mode: "premium",
-          on_voicemail_detected: { action: "stop_transfer" },
-        },
       },
     });
     expect(creates[2]?.body).toEqual({

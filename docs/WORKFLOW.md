@@ -47,7 +47,7 @@ The only encrypted variable is `mcp_token`, used as the MCP server credential th
 | `n_diagnose` | Diagnose | prompt, append | `run_line_diagnostics`, `report_outage` | |
 | `n_ticket` | Repair ticket | prompt, append | `create_ticket` | |
 | `n_handoff` | Handoff | speak | | |
-| `n_transfer` | Transfer | tool, shared transfer tool | | A warm transfer that the engineer accepts first and that stops at voicemail (ADR-021). Its one default edge is used only if the transfer fails |
+| `n_transfer` | Transfer | tool, shared transfer tool | | Its one default edge is used only if the transfer fails |
 | `n_message` | Take message | prompt, append | `create_ticket` | |
 | `n_degraded` | Degraded | prompt, replace | none | |
 | `n_end` | End call | tool, shared hangup tool, with a message | | Terminal |
@@ -117,9 +117,9 @@ These are delivered word for word.
 
 | Node | Message |
 |---|---|
-| Disclosure | {{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, and this call is recorded so we can improve our service. How can I help you today? |
+| Disclosure | {{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, and this call is recorded so we can improve our service. |
 | Outage notice | There's a confirmed outage affecting {{area_name}}. Our engineers are working on it, and we expect your service back {{outage_eta}}. Is that why you're calling, or is there something else I can help with? |
-| Handoff | I'm connecting you with one of our engineers now, so you'll hear ringing for a moment. The call may be recorded, and if you'd rather it wasn't, just tell the engineer. |
+| Handoff | I'll connect you with one of our support engineers now. Please stay on the line. |
 | End call | Thanks for calling Duinvezel. Goodbye. |
 
 ## Instructions
@@ -169,7 +169,7 @@ The last line names every custom variable an edge reads, and nothing else, becau
 
 ```text
 In this step you confirm the caller's identity before any account work.
-- The opening line has already asked how you can help. If the caller has not answered yet, say nothing and wait for them.
+- If the call has just started, speak first, before the caller says anything, and ask "How can I help you today?".
 - Verification mode is {{verify_mode}}. In postcode mode the caller's number already matched an account, so ask only for the postcode. In full mode, ask for the account number, which starts with DV, and then the postcode.
 - Call verify_account only once the caller has given every answer this mode needs. If one is missing, ask for it. Never guess an answer or leave one empty, and never confirm or deny details yourself.
 - When the result says verified, thank the caller by the first name it gives, then go on with what they asked for.
@@ -194,7 +194,7 @@ The caller is in an area with a confirmed outage. They have just heard about it 
 
 ```text
 Find out what the caller needs in one or two questions, then move on. If they have already said what they need, move on straight away.
-The opening line has already asked how you can help. If the caller has not answered yet, say nothing and wait for them.
+If the call has just started, speak first and ask "How can I help you today?".
 Answer simple questions yourself, using only the FAQ below.
 
 FAQ
@@ -260,8 +260,6 @@ Every path gets at least one real phone call before the demo. The evidence colum
 | I. Threshold crossing | `scripts/simulate-reports.ts` twice, then a live report | Incident declared once, next caller hears Outage notice | `incident_declared=true` exactly once |
 | J. Token failure | Wrong `MCP_ENC_KEY` in a test deploy | Telnyx's docs say the tools go missing and the model offers a person, but in S4 a browser call crashed at the first tool use (DEBUGLOG issue 13) | no MCP requests for the trace id |
 | K. Transfer fails | Invalid transfer target in a test version | Take message | `create_ticket` with category `callback` |
-| L. Transfer reaches voicemail | Let the transfer ring until voicemail answers | Handoff, Transfer, Take message | the transfer result in the transcript, then `create_ticket` with category `callback` if the caller wants one |
-| M. The engineer declines | Answer the transfer and say you cannot take the call | Handoff, Transfer, Take message | the transfer result gives the reason |
 
 ## Answers from spike S2
 

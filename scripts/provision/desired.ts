@@ -78,10 +78,8 @@ export type SharedToolDesired = {
 /**
  * The three shared tools, in the order the script provisions them. The
  * transfer's `from` is the assistant's own number, so the person answering
- * sees the support line. The transfer is warm: it briefs the engineer and
- * waits for their acceptance, and it stops at voicemail instead of leaving
- * the caller there (ADR-021). `session_id` on the webhook tool is a preset
- * body field since T23 (DEBUGLOG issue 19): Telnyx fills the preset from the
+ * sees the support line. `session_id` on the webhook tool is a preset body
+ * field since T23 (DEBUGLOG issue 19): Telnyx fills the preset from the
  * dynamic variable of the same name and keeps it out of the model's view, so
  * `body_parameters` asks the model for nothing
  * (https://developers.telnyx.com/docs/inference/ai-assistants/preset-webhook-parameters).
@@ -123,17 +121,6 @@ export function sharedToolBodies(input: {
         transfer: {
           targets: [{ name: "Duinvezel support engineer", to: input.transferTo }],
           from: input.phoneNumber,
-          warm_transfer_instructions:
-            "Tell the engineer in one or two short sentences what the customer needs " +
-            "and what has been done on this call, such as verification, a line check or a ticket. " +
-            "Give the customer's first name only if they were verified, " +
-            "and never read out a full account number. " +
-            "Then ask whether they can take the call now.",
-          warm_transfer_acceptance: { enabled: true },
-          voicemail_detection: {
-            detection_mode: "premium",
-            on_voicemail_detected: { action: "stop_transfer" },
-          },
         },
       },
     },
