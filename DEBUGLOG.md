@@ -716,6 +716,53 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Design impact.** ADR-021. Its settings are tested only once Thiago's calls after T29 go through.
 
+## 29. The model spoke before the caller could answer, and one call hung up
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** Thiago made two calls after T29's provisioning and a reset. In call A, from his mobile, the disclosure ended with "How can I help you today?", and the assistant asked for his postcode before he could say what he needed. Its reply after the postcode was also slow. In call B, from the browser, the assistant said aloud that it had to wait in silence, then said goodbye and hung up before he could speak.
+
+**Evidence.** The transcripts, times UTC. Route call's result starts the next step, and neither call has a caller line before the model's turn.
+
+```text
+Call A, mobile, conversation of 16:52:08
+16:52:10.876 n_disclosure assistant  Hi Thiago, you've reached Duinvezel fiber support. [...] How can I help you today?
+16:52:19.428 n_route      CALL       log_disclosure {}
+16:52:19.934 n_route      RESULT     {"logged":true}
+16:52:20.187 n_verify     assistant  I need to verify your identity first. Could you please give me your four-digit postcode?
+
+Call B, browser, conversation of 16:55:25
+16:55:28.546 n_disclosure assistant  Hello, you've reached Duinvezel fiber support. [...] How can I help you today?
+16:55:36.742 n_route      CALL       log_disclosure {}
+16:55:37.132 n_route      RESULT     {"logged":true}
+16:55:37.476 n_end__msg   assistant  I need to wait for the caller to respond. Since they haven't said anything yet, I should remain silent and wait for their input.
+16:55:38.454 n_end__msg   assistant  Thanks for calling Duinvezel. Goodbye.
+16:55:45.982 n_end        CALL       hangup {}
+```
+
+The model's turn came 0.25 s after Route call's result in call A and 0.34 s after it in call B. Call B's caller was anonymous, so Route call sent the call to Verify. The model's one turn there is logged under `n_end__msg`, End call's message, so that turn also took Verify's edge to End call.
+
+The slow reply in call A came after the postcode. Two tool calls ran back to back, and nothing was said between them.
+
+```text
+16:52:29.506 n_verify     user       Eight six thirty.
+16:52:30.086 n_verify     CALL       verify_account {"postcode":"8630"}
+16:52:32.255 n_verify     RESULT     verified
+16:52:32.652 n_triage     CALL       run_line_diagnostics {}
+16:52:33.959 n_triage     RESULT     line down
+16:52:34.264 n_triage     assistant  Your line has been down for about 111 minutes. [...]
+```
+
+The transcript gives that reply an end-user latency of 4,459 ms. voice-tools logged `verify_account` at 1,921 ms, of which 1,224 ms were KV reads, and `run_line_diagnostics` at 1,268 ms, of which 1,164 ms were the call to mock-crm. Its line test waits 800 to 1,500 ms on purpose. The three model steps around the two tools took about 1 s. The other replies in call A took 0.2 to 1.0 s. In the rehearsal's call 1, under T28, the same two tools ran, but the caller had said the line was down and the model said a short line between them, 2.7 s after the postcode. In call A the caller had not said why they called, and the model ran the line check anyway.
+
+**Cause.** The model takes a turn as soon as a step starts after a tool node (issue 24). T29 put the question into the disclosure and told the model in Verify and Triage to say nothing until the caller answered. That did not hold in either call. In call A the model moved on to the postcode, and in call B it spoke its reasoning as its reply and ended the call.
+
+**Fix.** Thiago asked the same evening to go back to T28, which had passed the rehearsal. Commit ba1f819 reverts T29's code and the lines that describe it in `docs/WORKFLOW.md` and `docs/ARCHITECTURE.md`. The question is again the model's first turn after Route call, and the pause before it is a known issue in the README. The transfer went back too, because its settings came with the same card and no call had tested them.
+
+The provisioning script compares only the keys it sends (`scripts/provision/compare.ts`). Going back to a transfer with only `targets` and `from` therefore cannot remove keys that T29 added to the tool, and a read-back of the tool shows whether the API kept them.
+
+**Design impact.** `docs/WORKFLOW.md` keeps the question with the model. An instruction cannot make a step wait for the caller when a tool node starts it. The disclosure could end with the question only if no tool node stood between it and the caller's answer, as with the outage notice since T28 (issue 24). ADR-021's transfer settings come back only as a separate change.
+
 ## S1 measurements
 
 Smoke test numbers from 9 Oct, server side, from invocation logs.
