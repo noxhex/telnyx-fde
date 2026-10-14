@@ -141,7 +141,7 @@ Telnyx-hosted models wrote the application code, tests, scripts and infrastructu
 
 - **Roles.** A bake-off on one card set them. Kimi-K3 implements and writes its own tests, and GLM-5.3 reviews. DeepSeek-V4-Flash-0731 wrote the tests of the first cards.
 - **`tools/card.sh`.** It runs one card at a time, the implementer, then `npm run check`, then the reviewer. It records the session, the models that answered and the tokens of every run. Claude Code then reads the whole diff, and it accepts the card or retries it with written feedback.
-- **The record.** [`DOGFOODING.md`](DOGFOODING.md) has a ledger row per attempt, with its cost and what broke, the bake-off, and what worked and what did not. [`docs/agent-runs.jsonl`](docs/agent-runs.jsonl) has every run, failed ones included, 55 runs over 28 cards.
+- **The record.** [`DOGFOODING.md`](DOGFOODING.md) has a ledger row per attempt, with its cost and what broke, the bake-off, and what worked and what did not. [`docs/agent-runs.jsonl`](docs/agent-runs.jsonl) has every run, failed ones included, 57 runs over 29 cards.
 
 ## Setup
 
