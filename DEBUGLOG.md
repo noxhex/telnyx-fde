@@ -519,7 +519,7 @@ The route checks the Telnyx signature first and answers 403 when it fails (`func
 ```
 
 - In both calls the five area reads ran into their 2,000 ms bound. The KV probe's put took about 2.3 to 2.5 s and its get ran out at 1.5 s, about twice the times of 13 October.
-- A fresh replica's secret reads cost the second call 890 ms. voice-tools' token key read on a fresh replica ran past its 1,000 ms bound, and Telnyx opened the MCP session again four seconds later.
+- A fresh replica's secret reads cost the second call 890 ms. voice-tools' token key read on a fresh replica ran past its 1,000 ms bound, and Telnyx opened the MCP session again four seconds later. The first call's transcript has the caller speaking from 06:27:54.7, so the session was back before they finished. The silence after the disclosure came from the instructions, which T25 changed, and not from the 503.
 
 **Cause.** Three gaps in `/dv`.
 
@@ -531,7 +531,80 @@ When `/dv` answers late or with an error, Telnyx uses the defaults, so the call 
 
 **Fix.** Card T24. The budget starts when the request arrives, and the token key reads are cut to what remains, so `/dv` answers within 3,000 ms of server time. Secret reads wait up to 2,000 ms and area reads up to 2,500 ms. The cache write no longer holds the answer and logs its own `crm_cache_write` line. A missing or null caller is anonymous.
 
-**Design impact.** The call setup budget in `docs/ARCHITECTURE.md` changes. voice-tools' MCP auth read keeps its 1,000 ms bound for the review (README, Known issues).
+**Design impact.** The call setup budget in `docs/ARCHITECTURE.md` changes. T26 raised voice-tools' MCP auth read to 2,000 ms as well. On the first call after T26's ship, at 12:49 UTC, that read took 1,031 ms on a fresh replica, and the session opened.
+
+## 21. Both transfers failed before anything rang
+
+**Date** 14 Oct 2026 · **Area** Voice, outbound voice profiles
+
+**Symptom.** In two afternoon calls the assistant said it would connect the caller with a support engineer, and then that the transfer did not go through. One call came from Thiago's mobile, the other from the browser. Nothing rang.
+
+**Evidence.** Both transcripts hold the `transfer` tool's result, from `GET /v2/ai/conversations/{id}/messages`. It came back 1.0 and 0.5 s after the tool call. Apart from the call control id, left out here, the two results are the same.
+
+```text
+{"status":403,"body":{"errors":[{"code":"10010","detail":"Dialed number is not included in whitelisted countries D13. This dialed number is not a number from whitelisted countries present in the OB profile associated with the connection making the call. To solve it the customer can add the number country to the whitelist of the given OB profile.","title":null}],"telnyx_error":{"error_code":"D13"}},"error_name":"Error during dial command"}
+```
+
+The shared transfer tool dials `TRANSFER_TO` from the assistant's number (`scripts/provision/desired.ts`). The provisioning script attaches that number to the assistant's TeXML application (`scripts/provision/run.ts`).
+
+**Cause.** The outbound voice profile of the connection making the call did not allow Belgium, so Telnyx refused the dial command. The transcripts show no other error. On the call from Thiago's mobile the transfer would have rung that same busy phone, but nothing was dialled. After each failure the call went to Take message, as designed.
+
+**Fix.** At 15:19 Brussels time Thiago allowed Europe on the account's default outbound voice profile in the portal. The provisioning script calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so it never reads or changes a profile. The README lists the step under Manual setup.
+
+**Design impact.** A transfer from a call made on `TRANSFER_TO` rings the phone that is already on the call. The repeat-caller path from Thiago's mobile can therefore never reach a person, and transfers are tested from the browser.
+
+## 22. A known caller was greeted as unknown after mock-crm scaled to zero
+
+**Date** 14 Oct 2026 · **Area** Edge Compute, replicas
+
+**Symptom.** Thiago's first afternoon check call from his mobile, at 14:49 Brussels time, greeted him as an unknown caller. His next call, 30 s later, greeted him by name.
+
+**Evidence.** Claude Code read the logs with read-only commands. Times are UTC.
+
+```text
+# telnyx-edge logs voice-context --type runtime, trimmed
+[2026-10-14T12:49:50.163Z] {"event":"dv","identity":"anonymous","cache":"miss","outcome":"degraded","reasons":["crm_timeout"],"status":200,"latency_ms":{"total":2509,"http":48,"kv":10453,"actor":484}}
+# telnyx-edge logs mock-crm --type runtime, trimmed
+[2026-10-14T12:40:40.227Z] [function-runtime] SIGTERM received, shutting down
+[2026-10-14T12:46:32.953Z] [function-runtime] SIGTERM received, shutting down
+[2026-10-14T12:50:01.148Z] [function-runtime] listening on :8080
+[2026-10-14T12:50:08.280Z] {"event":"crm_request","route":"customers","status":200,"latency_ms":{"total":1043,"http":718,"kv":279}}
+```
+
+- `/dv` already races the caller's KV copy against mock-crm, for up to 2,000 ms (`lookupCaller` in `functions/voice-context/src/routes/dv.ts`). Neither side answered.
+- A KV copy lives 600 s (`CRM_KV_TTL_SEC`), and nothing had looked his number up for hours.
+- mock-crm's last request before the call came at 06:50:49. Its two replicas stopped at 12:40 and 12:46. The lookup left voice-context at about 12:49:48, a new replica started 13 s later, and it answered 20 s after the lookup began.
+- voice-context itself was warm. Its secret reads took 48 ms.
+
+**Cause.** mock-crm had no replica left, and its first request waited about 20 s for a new one. No bound inside the 4,000 ms webhook timeout can cover that.
+
+**Fix.** None in code before the review. The warm-up's smoke test calls mock-crm, which starts a replica when none is running, and on 14 October its replicas then ran for almost six hours without a request. Thiago runs the warm-up at 15:45 and again just before the first demo call. The canary in the README's next step would keep a replica up all the time.
+
+**Design impact.** A call that meets mock-crm with no replica greets a known caller as unknown and asks for the full verification. The README lists it under Known issues.
+
+## 23. The model did everything from Verify
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** After verification the model never moved on to Triage or Diagnose. In one call the caller asked for an engineer and then for a live agent. The model offered a callback twice, created one the caller had not agreed to, and only then offered a person.
+
+**Evidence.** The transcripts give each message's `flow_node_id`. Five calls used MCP tools, and until the transfer in the last one every tool ran from `n_verify`.
+
+| Call (UTC) | Tools called from `n_verify` |
+|---|---|
+| 06:27, browser | `verify_account` twice, `run_line_diagnostics` |
+| 06:32, browser | `verify_account` twice, `run_line_diagnostics`, `report_outage` |
+| 12:50, phone | `verify_account`, `run_line_diagnostics` |
+| 12:54, browser | `verify_account`, `run_line_diagnostics` |
+| 13:00, browser | `verify_account`, `run_line_diagnostics`, `create_ticket` |
+
+In the last call the transfer then failed (issue 21), and Take message asked for a good time. The model called `create_ticket` again with that time in the summary. The `CustomerAccount` actor logged `outcome: existing`, because a ticket is idempotent per call and category (ADR-015), so the time never reached ticket T-2238.
+
+**Cause.** ADR-020 lets every prompt node see all five MCP tools, and only the instructions say which belong to a step. Verify's instructions name `verify_account` and `check_area_status`, and the model used the others anyway. Diagnose's outage rule from T25 and Take message's text were then not in its prompt.
+
+**Fix.** Card T27. The base instructions say each step uses only the tools it names, and Verify moves on as soon as the caller is verified. A request for a person goes to Handoff straight away, a callback is created only once the caller agrees, and the caller's time goes into the one `create_ticket` call.
+
+**Design impact.** ADR-020's consequences gain this evidence.
 
 ## S1 measurements
 

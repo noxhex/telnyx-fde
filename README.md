@@ -21,6 +21,12 @@ Before the review the demo state is reset, and two simulated outage reports are 
 
 Thiago shows the recognised-caller path from his own phone. That path is a greeting by name, a postcode-only check and the outage notice for his area.
 
+## Manual setup
+
+`scripts/provision.ts` creates or updates the assistant, its three shared tools and the MCP server, and attaches the phone number to the assistant's TeXML application. It calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so one setting stays manual.
+
+- **The outbound voice profile.** The transfer dials `TRANSFER_TO` from the assistant's number, so the outbound voice profile of the connection making the call must allow the target's country. On 14 October it allowed no Belgian number, and both transfers that day failed before anything rang (DEBUGLOG issue 21). Thiago then allowed Europe on the account's default profile, on the portal's Outbound Voice Profiles page. A new account needs the same step before a transfer can ring anyone.
+
 ## Before a demo
 
 Each function runs on several replicas, and a replica reads its secrets and flags on first use. On 13 October those reads took 0.55 to over 1 s, and they made two of the first calls miss the caller's account or a verification (DEBUGLOG issue 17). Since T22 a replica starts those reads on its first request of any kind, and a call that meets a fresh replica still gets through. The warm-up makes that case rarer. Before a demo Thiago runs four steps.
