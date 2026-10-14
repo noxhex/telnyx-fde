@@ -71,7 +71,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
 | T12 | Workflow content | T19 | done |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged second run comes with T23 |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged run after T27's provisioning closes it |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
 | T22 | Calls that survive a replica's first use | T20 | done, shipped |
 | T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, provisioned |
@@ -79,8 +79,9 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T14 | A warm-up before the review | T22 | not run, the warm-up is `t10_smoke` then `t10_inspector` (README) |
 | T21 | Fictional phone numbers in the tests | T11, last in the batch | done, no ship needed |
 | T24 | Call setup inside the webhook timeout | T22 | done, shipped on 14 Oct |
-| T25 | What callers hear | T24 | done, Thiago runs the provisioning script three times |
-| T26 | What the voice-tools tools tell the model | T24, T25 | done, voice-tools to ship |
+| T25 | What callers hear | T24 | done, provisioned on 14 Oct |
+| T26 | What the voice-tools tools tell the model | T24, T25 | done, shipped on 14 Oct |
+| T27 | Transfer first, and each step keeps to its tools | T25 | in progress |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |
