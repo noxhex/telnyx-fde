@@ -549,7 +549,7 @@ The shared transfer tool dials `TRANSFER_TO` from the assistant's number (`scrip
 
 **Cause.** The outbound voice profile of the connection making the call did not allow Belgium, so Telnyx refused the dial command. The transcripts show no other error. On the call from Thiago's mobile the transfer would have rung that same busy phone, but nothing was dialled. After each failure the call went to Take message, as designed.
 
-**Fix.** At 15:19 Brussels time Thiago allowed Europe on the account's default outbound voice profile in the portal. The provisioning script calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so it never reads or changes a profile. The README lists the step under Manual setup.
+**Fix.** At 15:19 Brussels time Thiago allowed Europe on the account's default outbound voice profile in the portal. The provisioning script calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so it never reads or changes a profile. The README lists the step under Manual setup. In the evening rehearsal the transfer in Geert's browser call rang Thiago's mobile at 15:24 UTC, and the tool's result read `Transfer completed` (issue 28).
 
 **Design impact.** A transfer from a call made on `TRANSFER_TO` rings the phone that is already on the call. The repeat-caller path from Thiago's mobile can therefore never reach a person, and transfers are tested from the browser.
 
@@ -671,6 +671,50 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 **Fix.** None before the review. After a caller's own report, `reports 8630 2` is enough, so the report that declares the incident is the last one sent. When the route answers 503, the `AreaIncident` log shows what landed.
 
 **Design impact.** The demo route's bound does not cover an alarm queued on the same actor.
+
+## 27. Callers spoke into the pause before the opening question
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, workflow
+
+**Symptom.** In the evening rehearsal Thiago found the pause between the disclosure and "How can I help you today?" long enough that callers start to talk.
+
+**Evidence.** The seven rehearsal calls that went to Verify, from their transcripts. Route call's tool call follows the spoken disclosure, and the question is the model's first reply in Verify.
+
+| Call (UTC) | Route call's webhook | Route call to the question |
+|---|---|---|
+| 15:14, phone | 0.54 s | 1.18 s |
+| 15:16, phone | 0.43 s | 1.36 s |
+| 15:18, browser | 0.62 s | 1.09 s |
+| 15:19, browser | 0.31 s | 0.58 s |
+| 15:21, browser | 0.28 s | 0.50 s |
+| 15:23, browser | 0.48 s | 1.28 s |
+| 15:25, browser | 0.45 s | 0.68 s |
+
+**Cause.** The question came from the model's turn after Route call. That turn waited for the disclosure webhook and then for the model's reply.
+
+**Fix.** Card T29. The disclosure line ends with the question, and Verify and Triage tell the model it has been asked and to wait for the answer.
+
+**Design impact.** Every path now hears the question. On the outage path the outage notice follows it about 0.7 s later, on the repeat-caller path the Handoff line, and on the Degraded path the model's apology. The model still gets a turn after Route call. Before T25, with no line about the opening, it waited in the call at 06:27 and asked on its own in the call at 06:32, so the first call after T29 shows whether the new line holds.
+
+## 28. The caller heard silence while the transfer rang
+
+**Date** 14 Oct 2026 · **Area** AI Assistants, transfer
+
+**Symptom.** In the evening rehearsal Geert's browser call was transferred to Thiago's mobile. On the browser side the caller heard nothing while the mobile rang.
+
+**Evidence.** The transcript, times UTC. The result came 16.4 s after the tool call.
+
+```text
+15:24:47.525 n_handoff  assistant  I'll connect you with one of our support engineers now. Please stay on the line.
+15:24:51.224 n_transfer CALL       transfer {}
+15:25:07.654 n_transfer RESULT     Transfer completed
+```
+
+**Cause.** The shared transfer tool set only `targets` and `from` (`scripts/provision/desired.ts`). Telnyx documents ringback for the caller only for a warm transfer with acceptance, where the caller stays with the assistant while it talks to the person who answered (ADR-021).
+
+**Fix.** Card T29 makes the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021). The Handoff line tells the caller to expect ringing.
+
+**Design impact.** ADR-021. Its settings are tested only once Thiago's calls after T29 go through.
 
 ## S1 measurements
 

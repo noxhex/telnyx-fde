@@ -215,3 +215,24 @@ Each record says what we decided, why, and what it costs. Records marked **Pendi
 **Decision.** Every prompt node sees all five tools of the MCP server `duinvezel-voice-tools`, and the payload sets no per-node tool field. Each node's instructions name the tools it may use, and a node without tools names none. The server's identity checks (ADR-013) stay the gate. Transfer, hangup and the disclosure log are shared tools that run only on their tool nodes and are not attached to the assistant.
 
 **Consequences.** The model can call a tool from a node that does not name it, for example `report_outage` from Triage. At worst that is an action the step did not plan, never one on another account or above the caller's identity level. T12 tests that each node's instructions name exactly its tools, and T13's transcripts show whether the model strays. On 14 October it strayed in every call that used an MCP tool, and ran the line check, an outage report and a callback from Verify (DEBUGLOG issue 23). T27 added a base rule that each step uses only the tools its instructions name, and the next call ignored it. Thiago then chose to drop the rule, and T28 moved the rules that must hold in every step into the base instructions. A plainer rule in Verify is the next step after the review, once a call shows whether a step change between two prompt nodes hands the model a turn. A speak node does not (DEBUGLOG issue 24).
+
+## ADR-021. A transfer briefs the engineer, waits for a yes and stops at voicemail
+
+**Status.** Accepted, 14 October, decided by Thiago. Untested until the calls after T29.
+
+**Evidence.** Telnyx's pages on warm transfer acceptance (https://developers.telnyx.com/docs/inference/ai-assistants/warm-transfer-acceptance.md) and on voicemail detection on transfer (https://developers.telnyx.com/docs/inference/ai-assistants/voicemail-detection-on-transfer.md), and the `TransferToolParams` schema in Telnyx's OpenAPI spec (https://raw.githubusercontent.com/team-telnyx/openapi/master/openapi/spec3.json), read on 14 October. DEBUGLOG issue 28.
+
+**Context.** The shared transfer tool set only `targets` and `from`. In the rehearsal the caller heard silence while the engineer's phone rang (DEBUGLOG issue 28). A transfer that reached the engineer's voicemail would have left the caller there. The transfer tool takes three more settings.
+
+- `warm_transfer_instructions` tells the assistant how to brief the person who answers.
+- `warm_transfer_acceptance` has the assistant ask that person, on a private leg, whether they take the call. Only a yes bridges the calls, and meanwhile the caller stays with the assistant and hears ringback. A decline, a hang-up or two minutes without an answer bring the assistant back to the caller.
+- `voicemail_detection` runs answering machine detection on the transfer. With the action `stop_transfer`, a transfer that reaches voicemail ends and the caller returns to the assistant.
+
+**Decision.** The transfer tool sets all three. The brief is one or two sentences on what the customer needs and what the call has done so far, and it ends by asking whether the engineer can take the call. Acceptance keeps its default private mode, so the exchange with the engineer stays out of the transcript, and `require_acceptance` stays unset. Voicemail detection runs in `premium` mode with `stop_transfer`. The Handoff line tells the caller they will hear ringing, that the call may be recorded, and that they can ask the engineer not to record it.
+
+**Consequences.**
+
+- The docs show these settings only on an assistant's inline transfer tool. The shared tools API leaves the `transfer` object open, so the provisioning runs after T29 show whether the API keeps them. The third run prints `unchanged` only if it does.
+- Acceptance is documented only for calls started with `ai_assistant_start`, and not for web calls. The docs do not say whether calls through the assistant's TeXML application and the portal's browser calls count, though both carry the channel `phone_call` in their transcripts. Where acceptance cannot run, the transfer falls back to a warm transfer that plays the brief to the engineer and then bridges.
+- The Transfer node's default edge is documented for a transfer that fails. Whether a decline or a stop at voicemail takes it to Take message is not documented, and the calls after T29 show it.
+- In private mode the transfer's result is the only record of the outcome in the transcript.

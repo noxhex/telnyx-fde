@@ -25,7 +25,7 @@ Thiago shows the recognised-caller path from his own phone. That path is a greet
 
 `scripts/provision.ts` creates or updates the assistant, its three shared tools and the MCP server, and attaches the phone number to the assistant's TeXML application. It calls only `/ai/tools`, `/ai/mcp_servers`, `/ai/assistants` and `/phone_numbers`, so one setting stays manual.
 
-- **The outbound voice profile.** The transfer dials `TRANSFER_TO` from the assistant's number, so the outbound voice profile of the connection making the call must allow the target's country. On 14 October it allowed no Belgian number, and both transfers that day failed before anything rang (DEBUGLOG issue 21). Thiago then allowed Europe on the account's default profile, on the portal's Outbound Voice Profiles page. A new account needs the same step before a transfer can ring anyone.
+- **The outbound voice profile.** The transfer dials `TRANSFER_TO` from the assistant's number, so the outbound voice profile of the connection making the call must allow the target's country. On 14 October it allowed no Belgian number, and both transfers that day failed before anything rang (DEBUGLOG issue 21). Thiago then allowed Europe on the account's default profile, on the portal's Outbound Voice Profiles page, and in the evening rehearsal a transfer from a browser call rang his mobile. A new account needs the same step before a transfer can ring anyone.
 
 ## Before a demo
 
