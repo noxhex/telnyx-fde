@@ -82,7 +82,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T25 | What callers hear | T24 | done, provisioned on 14 Oct |
 | T26 | What the voice-tools tools tell the model | T24, T25 | done, shipped on 14 Oct |
 | T27 | Transfer first, and each step keeps to its tools | T25 | done, T28 drops its tool-scope rule |
-| T28 | One name in the opening, no repeats, no pause after the outage notice | T27 | in progress |
+| T28 | One name in the opening, no repeats, no pause after the outage notice | T27 | done, Thiago runs the provisioning script three times |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |

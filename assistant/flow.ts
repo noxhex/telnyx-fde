@@ -169,7 +169,8 @@ export const nodeDefinitions: readonly NodeDef[] = [
     name: "Outage notice",
     message:
       "There's a confirmed outage affecting {{area_name}}. Our engineers are working on it, " +
-      "and we expect your service back {{outage_eta}}.",
+      "and we expect your service back {{outage_eta}}. Is that why you're calling, " +
+      "or is there something else I can help with?",
   },
   {
     kind: "prompt",
