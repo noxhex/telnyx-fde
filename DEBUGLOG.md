@@ -833,7 +833,7 @@ S1, 10 Oct. `GET /timing` on the smoke function times one KV put, one KV get of 
 
 12 Oct 2026, times in UTC. Thiago ran the steps from `~/code/scratch/t10/t10.sh`. Client times come from `curl`, server times from `telnyx-edge logs <name> --type invocations`, and voice-context's checks from its `/internal/health` answers (`~/code/scratch/t10/health-*.json`) and its runtime log.
 
-**Ships.** Each ship ran with `--timeout 15m` and finished on its own. voice-tools bundles the MCP SDK, and its ship took the longest.
+**Ships.** Each ship ran with `--timeout 15m` and finished on its own. voice-tools bundles the MCP SDK, and its ship took the longest. On 14 October T26's ship of voice-tools built for 16 min 18 s, where its five earlier ships built in 3 min 55 s to 4 min 39 s (`telnyx-edge deployments voice-tools`). The 15-minute limit ended the CLI's watch of that ship, which went on to `deploy_ok` at about 20 minutes. CLI 0.5.10 waits 30 minutes by default, so the README's setup sets no limit.
 
 | Function | Shipped in, CLI | Wall time | Bundle | Archive |
 |---|---|---|---|---|

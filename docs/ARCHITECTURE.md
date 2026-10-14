@@ -61,8 +61,8 @@ Duinvezel's voice assistant answers every call and does four things.
 | `CustomerAccount` | Stateful Actor, one per account | Call history, verification attempts and lockout, repair tickets |
 | `AreaIncident` | Stateful Actor, one per postcode | Outage reports, the incident decision, subscribers, publishing area status to KV |
 | `Session` | Stateful Actor, one per call | The call's session (trace id, identity level, account, area, disclosure, verification failures without an account), deleted by an alarm when it expires |
-| `Canary` | Stateful Actor, single instance | Synthetic end-to-end check every 30 seconds, and the alert |
-| KV namespace `duinvezel` | Telnyx KV | CRM cache, feature flags, area status read model, callback requests, canary results |
+| `Canary` | Stateful Actor, single instance, planned and not built (README, "Next step, a canary") | Synthetic end-to-end check every 30 seconds, and the alert |
+| KV namespace `duinvezel` | Telnyx KV | CRM cache, feature flags, area status read model, callback requests, and the planned canary's results (README, "Next step, a canary") |
 
 ## A call, step by step
 
@@ -98,7 +98,7 @@ KV keys allow only `a-z A-Z 0-9 - _ / = .`. Phone numbers therefore drop the `+`
 | `area/<postcode>/status` | `{ state, incidentId, eta, version, updatedAt }` | none | AreaIncident actor |
 | `callback/<sid>` | Callback request from a caller without an account | 7 days | voice-tools |
 | `flags/global` | Feature flags as JSON | none | scripts or by hand |
-| `canary/last` | Last canary run with per-check latency | none | Canary actor |
+| `canary/last` | Last canary run with per-check latency, planned with the Canary actor (README, "Next step, a canary") | none | Canary actor |
 | `canary/probe` | Scratch value for the health check's KV round trip | 60 s | voice-context |
 
 `<sid>` is the first 32 hex characters of a SHA-256 hash of the call control id. Sessions created through `POST /internal/sessions` get a random sid of the same form.
@@ -110,7 +110,7 @@ KV keys allow only `a-z A-Z 0-9 - _ / = .`. Phone numbers therefore drop the `+`
 | `CustomerAccount` | account number, for example `DV-100231` | `recordCall`, `verify`, `createTicket`, `snapshot`, `alarm` |
 | `AreaIncident` | postcode, for example `8630` | `report`, `status`, `resolve`, `subscribe` (stretch), `alarm` |
 | `Session` | sid | `create`, `get`, `markDisclosure`, `setVerified`, `recordVerifyFailure`, `alarm` |
-| `Canary` | `canary` | `start`, `lastRun`, `alarm` |
+| `Canary`, planned and not built (README, "Next step, a canary") | `canary` | `start`, `lastRun`, `alarm` |
 
 The session document holds `sid`, `traceId`, `identity`, `accountNumber`, `postcode` and `lineId` when known, `callerPhone` (E.164, for callbacks), `createdAt`, `expiresAt` (two hours after creation), `disclosedAt`, and the verification failures and lock for account numbers that do not exist. Card T18 defines it in full.
 
@@ -193,10 +193,10 @@ The two token keys, the flags, the CRM lookup and the five area statuses start t
 
 | Failure | What the caller gets | How we notice |
 |---|---|---|
-| Webhook times out or errors | Telnyx falls back to defaults, `session_ok` stays `"false"`, and the Degraded node offers a person | Canary alert, `dv` error log, Degraded node in the transcript |
+| Webhook times out or errors | Telnyx falls back to defaults, `session_ok` stays `"false"`, and the Degraded node offers a person | `dv` error log, Degraded node in the transcript, and a Canary alert once the canary is built (README, "Next step, a canary") |
 | Token cannot be decrypted, for example when the integration secret and the edge secret differ | Telnyx makes no MCP request. Its docs say the call goes on without the tools, but in S4 the call crashed at the first tool use (DEBUGLOG issue 13). Both copies of the key are written together from one value, and every key change gets a real test call before the demo | `dv` succeeded but no MCP calls arrive for that trace id, and the call ends when the caller needs a tool |
 | mock-crm slow or down | Caller treated as unknown and asked to verify | `crm_timeout` in the `dv` log, falling cache hit rate |
-| KV publish from the actor fails | The incident is still recorded, and the actor's alarm retries the publish | `publish_retry` log line, canary area check |
+| KV publish from the actor fails | The incident is still recorded, and the actor's alarm retries the publish | `publish_retry` log line, and a canary area check once the canary is built (README, "Next step, a canary") |
 | Actor call fails at call setup | No repeat-caller flag, and the call continues normally | `actor_error` field in the `dv` log |
 | `Session.create` fails at call setup | The variables still carry the greeting and the outage notice, but the MCP tools answer 401 for that call. The prompts admit missing tools and offer a person | `session_error` or `session_timeout` in the `dv` log reasons |
 | Transfer fails | The Take message node records a callback request | Transfer tool status in the transcript |
@@ -207,8 +207,8 @@ Platform invocation logs run at least 30 seconds behind and record no client IP 
 
 - **One structured JSON line per request** with `ts`, `level`, `svc`, `event`, `trace_id`, `node`, `tool`, masked `caller` and `account`, `outcome`, `status`, `cache`, and `latency_ms` split into `total`, `kv`, `actor` and `crm`.
 - **One trace id per call.** `trace_id` is the call control id, so our logs join Telnyx's own conversation records. It reaches `voice-tools` through the session. Callers pass it to every state-changing actor method as `traceId`, and each such method logs one line with it. `AreaIncident` keeps the trace id of the change that set its outbox, so the `publish` and `publish_retry` lines its alarm writes carry the trace id of the call behind them. Actor methods write to their type's log, which `telnyx-edge actors logs <Type>` reads. The platform redacts some values in runtime logs, and an `internal-<sid>` trace id reads `internal-[redacted]` in every line (DEBUGLOG issue 16). The first real call shows whether a call control id survives.
-- **A signal beyond logs.** Per-hop latency on every line, plus the canary's latency series in `canary/last`.
-- **Detection within a minute.** The Canary actor runs a synthetic end-to-end check every 30 seconds through the same code paths a call uses, and pushes an alert to a phone after two consecutive failures.
+- **A signal beyond logs.** Per-hop latency on every line. The planned canary adds its latency series in `canary/last` (README, "Next step, a canary").
+- **Detection within a minute, planned.** The Canary actor would run a synthetic end-to-end check every 30 seconds through the same code paths a call uses, and push an alert to a phone after two consecutive failures. It is not built yet (README, "Next step, a canary").
 - **A live view during the demo.** `telnyx-edge logs <function> --tail --json` piped through `jq`.
 
-The README will answer the brief's question directly. It will say how you would know within a minute that the assistant was broken, and what you would look at first.
+The README's "Detecting breakage within a minute" answers the brief's question. It lists the checks that find a break until the canary runs, and what to look at first.

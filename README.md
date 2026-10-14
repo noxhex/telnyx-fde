@@ -145,7 +145,7 @@ Telnyx-hosted models wrote the application code, tests, scripts and infrastructu
 
 From a fresh clone to a working phone number. Every key and number stays in `~/.config/telnyx/env` or in a secret, never in the repo. The `telnyx.toml` files and `infra/ids.json` name this deployment's functions, KV namespace and mock-crm URL, so another Telnyx account first registers its own three functions, as `tasks/T01-repo-scaffold.md` did, and puts their ids and URLs there.
 
-1. **Prerequisites.** Node 26 with npm, the `telnyx-edge` CLI, `curl`, `jq`, `openssl`, and a Telnyx number for the assistant. This repo runs on Node v26.11.1, npm 12.2.0 and `telnyx-edge` v0.5.10. `~/.config/telnyx/env` exports the Telnyx API key as `TELNYX_API_KEY`, the assistant's number as `DUINVEZEL_PHONE_NUMBER` and the phone a transfer rings as `TRANSFER_TO`, both numbers in E.164.
+1. **Prerequisites.** Node 26 with npm, the `telnyx-edge` CLI, `curl`, `jq`, `openssl`, and a Telnyx number for the assistant. This repo runs on Node v26.11.1, npm 12.2.0 and `telnyx-edge` v0.5.10. `~/.config/telnyx/env` exports the variables the scripts read. `scripts/provision.ts` reads the Telnyx API key as `TELNYX_API_KEY`, the assistant's number as `DUINVEZEL_PHONE_NUMBER` and the phone a transfer rings as `TRANSFER_TO`, both numbers in E.164. `scripts/smoke.sh` and `scripts/demo.sh` read `DUINVEZEL_INTERNAL_KEY`, which step 4 adds.
 
    ```bash
    node --version && npm --version && telnyx-edge --version
@@ -167,7 +167,7 @@ From a fresh clone to a working phone number. Every key and number stays in `~/.
    telnyx-edge storage kv key put "$NS" flags/global '{"incident_threshold":3,"report_window_secs":1800,"incident_eta_minutes":240,"diagnostics_enabled":true,"dv_force_error":false,"crm_delay_ms":0,"crm_fail":false}'
    ```
 
-4. **Secrets.** Edge secrets are shared by every function in the account, and each value comes from a command. `MCP_TOKEN_KEY` signs and checks the per-call token (voice-context and voice-tools). `MCP_ENC_KEY` encrypts it for Telnyx (voice-context), and Telnyx's integration secret `mcp_enc_key` holds the same value, because a mismatch crashes a call at its first tool use (DEBUGLOG issue 13). `INTERNAL_KEY` guards the internal routes and mock-crm (all three). `TELNYX_PUBLIC_KEY` checks Telnyx's webhook signatures (voice-context). `DEMO_CALLER_PHONE` is the number mock-crm knows as the demo customer (mock-crm).
+4. **Secrets.** Edge secrets are shared by every function in the account, and each value comes from a command. `MCP_TOKEN_KEY` signs and checks the per-call token (voice-context and voice-tools). `MCP_ENC_KEY` encrypts it for Telnyx (voice-context), and Telnyx's integration secret `mcp_enc_key` holds the same value, because a mismatch crashes a call at its first tool use (DEBUGLOG issue 13). `INTERNAL_KEY` guards the internal routes and mock-crm (all three). `TELNYX_PUBLIC_KEY` checks Telnyx's webhook signatures (voice-context). `DEMO_CALLER_PHONE` is the number mock-crm knows as the demo customer (mock-crm). The commands also add two lines to `~/.config/telnyx/env`, each from the same generated value as its edge secret. `DUINVEZEL_INTERNAL_KEY` equals `INTERNAL_KEY`, and `scripts/smoke.sh` and `scripts/demo.sh` send it in the `x-internal-key` header. `DUINVEZEL_MCP_ENC_KEY` equals `MCP_ENC_KEY`, and the last command makes the integration secret from it. A key that changes later changes in both places.
 
    ```bash
    source ~/.config/telnyx/env
@@ -191,12 +191,12 @@ From a fresh clone to a working phone number. Every key and number stays in `~/.
      -d "{\"identifier\":\"mcp_enc_key\",\"type\":\"bearer\",\"token\":\"$DUINVEZEL_MCP_ENC_KEY\"}" | jq '.data.identifier'
    ```
 
-5. **Ship, in this order.** voice-tools ships the actor classes that voice-context binds. If the CLI gives up, check `telnyx-edge list` and `telnyx-edge ship status <name>` before shipping again.
+5. **Ship, in this order.** voice-tools ships the actor classes that voice-context binds. A ship can take up to about 20 minutes, so the commands keep the CLI's own timeout (DEBUGLOG, T10 measurements). If the CLI gives up, check `telnyx-edge list` and `telnyx-edge ship status <name>` before shipping again.
 
    ```bash
-   (cd functions/mock-crm && telnyx-edge ship --timeout 15m)
-   (cd functions/voice-tools && telnyx-edge ship --timeout 15m)
-   (cd functions/voice-context && telnyx-edge ship --timeout 15m)
+   (cd functions/mock-crm && telnyx-edge ship)
+   (cd functions/voice-tools && telnyx-edge ship)
+   (cd functions/voice-context && telnyx-edge ship)
    ```
 
 6. **Provision the assistant.** `scripts/provision.ts` checks the integration secret, creates or updates the three shared tools, the MCP server and the assistant, attaches the number to the assistant's TeXML application and writes the ids to `infra/ids.json`. The dry run sends only reads and writes no file. The rerun must print `unchanged` for every resource.
