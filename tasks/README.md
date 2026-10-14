@@ -71,7 +71,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T19 | voice-tools MCP tools that change state | T06, T07, T09, T18 | done |
 | T10 | Deploy and smoke-test all three functions | T08, T09, T19 | done |
 | T12 | Workflow content | T19 | done |
-| T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged third run after the rollback's provisioning closes it |
+| T11 | Assistant provisioning script | S2, S4, T10, T12 | done, T30's third provisioning run printed unchanged everywhere on 14 Oct |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
 | T22 | Calls that survive a replica's first use | T20 | done, shipped |
 | T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, provisioned |
@@ -84,7 +84,7 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T27 | Transfer first, and each step keeps to its tools | T25 | done, T28 drops its tool-scope rule |
 | T28 | One name in the opening, no repeats, no pause after the outage notice | T27 | done, provisioned on 14 Oct |
 | T29 | The opening question in the disclosure, and a warm transfer | T28 | rolled back on 14 Oct (DEBUGLOG issue 29) |
-| T30 | The Handoff line and voicemail detection on the transfer | T28 | done, Thiago runs the provisioning script three times |
+| T30 | The Handoff line and voicemail detection on the transfer | T28 | done, provisioned and verified on calls on 14 Oct |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | in progress, no agent code. The evening rehearsal of 14 Oct is in `docs/TEST-PLAN.md` |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |

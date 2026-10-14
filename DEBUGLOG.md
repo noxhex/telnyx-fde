@@ -714,7 +714,18 @@ The scope rule did not hold. In the rehearsal's first call at 13:53, with T27 li
 
 **Fix.** Card T29 made the transfer warm, with the engineer's acceptance and voicemail detection (ADR-021), and told the caller to expect ringing. It was rolled back with the rest of T29 the same evening (issue 29), before any call tested the transfer. Card T30 brings back only voicemail detection, with acceptance switched off, so the caller still hears silence, and the Handoff line now says it may be quiet for a moment.
 
-**Design impact.** ADR-021, rolled back with T29 and amended for T30.
+**Verified.** Thiago's two browser calls after T30's provisioning, times UTC. In the first he answered the transfer on his mobile.
+
+```text
+18:46:23.682 n_handoff  assistant  I'm connecting you with one of our engineers now. Please stay on the line, it may be quiet for a moment. The call may be recorded, and if you'd rather it wasn't, just tell the engineer.
+18:46:33.064 n_transfer CALL       transfer {}
+18:46:44.406 n_transfer user       Hello?
+18:46:46.114 n_transfer RESULT     Transfer completed
+```
+
+The Handoff line ended at 18:46:33.062, and the caller was connected 13.05 s later. The assistant said nothing in between, to the caller or to the engineer. The one line in that time is a "Hello?" 1.7 s before the bridge, which matches Thiago answering on his mobile. In the second call he let the transfer ring through to his voicemail. The tool's result came 35.6 s after the tool call, `Voicemail detected while transferring. Destination disconnected.`, and the call went on to Take message (issue 30). A read-back of the tool showed `warm_transfer_instructions` as the empty string (ADR-021).
+
+**Design impact.** ADR-021, rolled back with T29 and amended for T30, which these calls verified.
 
 ## 29. The model spoke before the caller could answer, and one call hung up
 

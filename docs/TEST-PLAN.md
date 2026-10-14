@@ -26,8 +26,18 @@ T28 was live. Before the calls Thiago ran the steps in the README's "Before a de
 | 7 | Browser, Geert, path H | 15:23:01 to 15:25:07 | `v3:GYnkWkvVtr40w_1Ig` | `anonymous`, no outage | `verify_account` three times, wrong, wrong, then locked for 15 minutes | `verify` wrong three times | The lock, an offer of a person, and the Handoff line. The transfer rang Thiago's mobile, and its result read `Transfer completed` 16.4 s after the tool call. The caller heard silence while it rang (DEBUGLOG issue 28) |
 | 8 | Browser, Geert again | 15:25:29 to 15:25:54 | `v3:C8uBfvQePGjeTaIcf` | `anonymous`, no outage | none | none | The caller asked for a person, and the Handoff line came straight away, before any verification (T27). The transfer completed after 5.4 s. The caller did not try to verify, so this call did not show the lock again |
 
+## T30 calls, 14 October evening
+
+T30 was live, after the rollback of T29 (DEBUGLOG issue 29). At 18:43:50 `scripts/demo.sh reset` reset the eight accounts and five areas, and their statuses reached KV by 18:43:52. No simulated reports were added.
+
+| # | Call | Window | Trace id | `dv` | MCP calls | Actor lines | What it sounded like |
+|---|---|---|---|---|---|---|---|
+| 1 | Thiago's mobile, path C | 18:44:20 to 18:45:40 | `v3:dWo8wcFHeQxBd2c-4` | `number_match`, CRM cache miss, no outage, not a repeat caller, 1,072 ms | `verify_account` with the postcode, verified, 2,190 ms, of which 1,732 ms KV. `run_line_diagnostics`, line down, 1,220 ms. `report_outage`, counted, 480 ms | `recordCall` recorded, `verify` ok, report on 8630 counted | T28's opening again, the disclosure and then "How can I help you today?" 0.82 s after Route call started. Postcode only, a line down for 97 minutes, and a report once he said to go on. He paused before answering the offer, and Telnyx's silence prompt had the assistant ask whether he was still there |
+| 2 | Browser, a person on request, answered | 18:46:09 to 18:46:46 | `v3:hU57YoV3OJFfYiUb8` | `anonymous`, no outage, 1,020 ms | none | none | He asked for an agent after the opening question. The Handoff line as written, then 13.05 s of silence until the bridge, with nothing said to him on the mobile before it (DEBUGLOG issue 28) |
+| 3 | Browser, path L | 18:47:16 to 18:48:54 | `v3:r5_SigwSCvV4YHvK-` | `anonymous`, no outage, 929 ms | `create_ticket`, callback, 1,492 ms, of which 1,343 ms KV | none | The Handoff line, then the transfer rang through to his voicemail. Detection stopped it 35.6 s after the tool call, and Take message apologised and offered a callback. Ticket T-9861 for 15 October 08:00 to 12:00, with his 5 PM noted. After the read-back the assistant waited 4.4 s without a question until he spoke, then said goodbye (DEBUGLOG issue 30) |
+
 ## Still open after 14 October
 
 - Path D, the repeat caller, was not run. Its transfer would ring the phone already on the call (DEBUGLOG issue 21).
 - Path H's second call did not show the lock, because the caller asked for a person first.
-- T29 was rolled back on the evening of 14 October (DEBUGLOG issue 29), so the opening and the transfer are T28's again. The final rehearsal on 15 October runs the main paths again.
+- T29 was rolled back on the evening of 14 October (DEBUGLOG issue 29), so the opening is T28's again, and T30 brought back only voicemail detection on the transfer. The final rehearsal on 15 October runs the main paths again.
