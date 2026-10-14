@@ -36,6 +36,49 @@ Before the review the demo state is reset, and two simulated outage reports are 
 
 Thiago shows the recognised-caller path from his own phone. That path is a greeting by name, a postcode-only check and the outage notice for his area.
 
+## Architecture
+
+Each arrow is labelled with what it carries. `docs/ARCHITECTURE.md` has the components, a call step by step and the data contracts.
+
+```mermaid
+flowchart LR
+    caller(["Caller"])
+    telnyx_number["Telnyx number<br/>+1 650 536 0717"]
+
+    subgraph ai_assistant["Telnyx AI Assistant, Duinvezel Support"]
+        workflow["Workflow<br/>Disclosure, Route call,<br/>prompt and speak nodes"]
+    end
+
+    subgraph edge_compute["Telnyx Edge Compute"]
+        vc["voice-context<br/>POST /dv<br/>POST /tools/disclosure"]
+        vt["voice-tools<br/>POST /mcp, the MCP server"]
+        subgraph actor_group["Actors, shipped by voice-tools"]
+            ca["CustomerAccount<br/>one per account"]
+            ai["AreaIncident<br/>one per postcode"]
+            se["Session<br/>one per call"]
+        end
+        kv[("KV")]
+        crm["mock-crm"]
+    end
+
+    caller -- "phone call" --> telnyx_number
+    telnyx_number -- "starts the assistant through its TeXML app" --> workflow
+    workflow -- "call setup webhook, signed" --> vc
+    vc -- "dynamic variables and the encrypted per-call token" --> workflow
+    workflow -- "Route call logs the disclosure, with the session id" --> vc
+    workflow -- "MCP tool calls, the per-call token as bearer" --> vt
+    vc -- "caller lookup by number" --> crm
+    vc -- "reads flags, area status and the CRM cache, writes the CRM cache" --> kv
+    vc -- "records the call" --> ca
+    vc -- "creates the session, marks the disclosure" --> se
+    vt -- "loads the session, records verification" --> se
+    vt -- "verification attempts and tickets" --> ca
+    vt -- "outage reports" --> ai
+    vt -- "account lookup and line test" --> crm
+    vt -- "reads area status and flags, writes callback requests" --> kv
+    ai -- "publishes the area status" --> kv
+```
+
 ## How the workflow is built
 
 The full design is in `docs/WORKFLOW.md`, and `assistant/flow.ts` builds it for the provisioning script.
