@@ -759,7 +759,7 @@ The transcript gives that reply an end-user latency of 4,459 ms. voice-tools log
 
 **Fix.** Thiago asked the same evening to go back to T28, which had passed the rehearsal. Commit ba1f819 reverts T29's code and the lines that describe it in `docs/WORKFLOW.md` and `docs/ARCHITECTURE.md`. The question is again the model's first turn after Route call, and the pause before it is a known issue in the README. The transfer went back too, because its settings came with the same card and no call had tested them.
 
-The provisioning script compares only the keys it sends (`scripts/provision/compare.ts`). Going back to a transfer with only `targets` and `from` therefore cannot remove keys that T29 added to the tool, and a read-back of the tool shows whether the API kept them.
+The provisioning script compares only the keys it sends (`scripts/provision/compare.ts`). Going back to a transfer with only `targets` and `from` therefore cannot remove keys that T29 added to the tool, and a read-back of the tool shows whether the API kept them. The portal shows none of these settings, so T30's provisioning clears them itself (ADR-021, the amendment for T30).
 
 **Design impact.** `docs/WORKFLOW.md` keeps the question with the model. An instruction cannot make a step wait for the caller when a tool node starts it. The disclosure could end with the question only if no tool node stood between it and the caller's answer, as with the outage notice since T28 (issue 24). ADR-021's transfer settings come back only as a separate change.
 

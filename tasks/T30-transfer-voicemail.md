@@ -11,6 +11,8 @@ T29 was rolled back on 14 October, because its opening failed on the first two c
 
 Change 1 is workflow text, and `docs/WORKFLOW.md` already holds it. Change 2 is the transfer tool's body in the provisioning script. The card needs a provisioning run and no ship.
 
+**Extension, the same evening.** The portal shows none of the transfer tool's warm transfer or voicemail settings, so the provisioning has to clean up after T29 itself. After a run, `duinvezel-transfer` holds exactly `targets`, `from`, `voicemail_detection` and `warm_transfer_acceptance` with `enabled` false, and no brief. Telnyx documents neither whether an update replaces a tool's definition or merges into it, nor a value that removes a field, so the brief goes out as the empty string. The compare counts any other brief as a difference, so a run cannot print `unchanged` while one is still live. The implementer's two runs had each ended with an empty reply after its four files were done, and Thiago asked Claude Code to make this part itself.
+
 ## Keep the session small
 
 This card has a budget. Thiago asked for small cards and lean sessions on 13 October.
@@ -24,7 +26,8 @@ This card has a budget. Thiago asked for small cards and lean sessions on 13 Oct
 - `assistant/flow.ts`, only the `message` of Handoff
 - `scripts/provision/desired.ts`, only the transfer tool's body in `sharedToolBodies` and that function's doc comment
 - `scripts/test/provision-first-run.test.ts`, only the expected transfer body
-- `scripts/test/provision-updates.test.ts`, two new tests
+- `scripts/test/provision-updates.test.ts`, four new tests
+- `scripts/provision/compare.ts`, a rule for the transfer's brief, and `scripts/test/compare.test.ts`, its tests (the extension)
 
 Change no other file. Every other node, edge and line stays as it is, the opening included. No other test should need a change. If one does, stop and say why in your report.
 
@@ -45,13 +48,15 @@ Change no other file. Every other node, edge and line stays as it is, the openin
       "detection_mode": "premium",
       "on_voicemail_detected": { "action": "stop_transfer" }
     },
-    "warm_transfer_acceptance": { "enabled": false }
+    "warm_transfer_acceptance": { "enabled": false },
+    "warm_transfer_instructions": ""
   }
 }
 ```
 
+- `matchTransfer` in `compare.ts` compares the transfer's `transfer` object for `diffTool`, and only the transfer tool's. Every key matches as before, except the brief. A body that sends the empty string, or no brief, matches a read-back of `""`, `null` or no brief, and any other text is a difference.
+
 - The doc comment of `sharedToolBodies` says in one or two sentences that the transfer stops at voicemail, and that acceptance is sent switched off rather than left out, because the script compares only the keys it sends (ADR-021, DEBUGLOG issue 29).
-- `scripts/provision/compare.ts` needs no change.
 
 ## Tests
 
@@ -61,15 +66,17 @@ Change no other file. Every other node, edge and line stays as it is, the openin
   2. T29's shape, which adds three keys to T28's: `warm_transfer_instructions` with any short text, `warm_transfer_acceptance` as `{ "enabled": true }`, and `voicemail_detection` exactly as above.
 - In both, a real run then prints `tool duinvezel-transfer (tool-0002-uuid): updated (transfer)`. It sends exactly one write, a PATCH to `/ai/tools/tool-0002-uuid` whose `transfer` object equals the one above, and it prints `unchanged` for every other resource. A run after that prints `unchanged` for every resource and sends only GET requests.
 
-The check ran 937 tests before this card, and it runs 939 after it.
+- The extension adds two more in `provision-updates.test.ts`, a brief stored as `null` or left out reads as unchanged, and a brief still on the tool brings an update. `compare.test.ts` gets six for `matchTransfer` and `diffTool`.
+
+The check ran 937 tests before this card, and it runs 947 after it.
 
 ## Acceptance
 
-- [ ] `npm run check` passes with 939 tests.
+- [ ] `npm run check` passes with 947 tests.
 - [ ] The diff touches only the files above.
 
 ## Out of scope
 
 - Every other node's text, the opening included, and every edge.
-- `warm_transfer_instructions`, `require_acceptance`, `end_user_target_context_mode`, `warm_message_delay_ms` and `detection_config` (ADR-021).
-- Any change to `compare.ts` or to the variable contract.
+- `require_acceptance`, `end_user_target_context_mode`, `warm_message_delay_ms` and `detection_config` (ADR-021).
+- Any other change to `compare.ts`, and any change to the variable contract.
