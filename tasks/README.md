@@ -73,11 +73,12 @@ This assumes the review on Wednesday 14 October. Shift it if the slot differs.
 | T12 | Workflow content | T19 | done |
 | T11 | Assistant provisioning script | S2, S4, T10, T12 | in progress, provisioned and first calls made on 13 Oct, the unchanged second run comes with T23 |
 | T20 | Flags that refresh in the background, and mock-crm's first request | T10, T11 | done |
-| T22 | Calls that survive a replica's first use | T20 | done, voice-context and voice-tools to ship |
-| T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, Thiago runs the provisioning script three times |
-| T15 | Demo tooling: flags, simulated outage reports and a reset | T22 | done, voice-tools to ship |
+| T22 | Calls that survive a replica's first use | T20 | done, shipped |
+| T23 | The disclosure line once, and the disclosure tool's session id | T11 | done, provisioned |
+| T15 | Demo tooling: flags, simulated outage reports and a reset | T22 | done, shipped on 14 Oct |
 | T14 | A warm-up before the review | T22 | not run, the warm-up is `t10_smoke` then `t10_inspector` (README) |
 | T21 | Fictional phone numbers in the tests | T11, last in the batch | done, no ship needed |
+| T24 | Call setup inside the webhook timeout | T22 | in progress |
 | T13 | Path tests and the rehearsal | T15, T22, T23 | ready, no agent code |
 | T16 | Stretch goals | T13 | outline |
 | T17 | README and submission | T13 | outline |
