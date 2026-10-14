@@ -152,7 +152,7 @@ export const nodeDefinitions: readonly NodeDef[] = [
     name: "Disclosure",
     message:
       "{{greeting_line}}, you've reached Duinvezel fiber support. I'm an automated assistant, " +
-      "and this call is recorded so we can improve our service.",
+      "and this call is recorded so we can improve our service. How can I help you today?",
   },
   { kind: "tool", id: "n_route", name: "Route call", tool: "logDisclosure" },
   {
@@ -208,7 +208,9 @@ export const nodeDefinitions: readonly NodeDef[] = [
     kind: "speak",
     id: "n_handoff",
     name: "Handoff",
-    message: "I'll connect you with one of our support engineers now. Please stay on the line.",
+    message:
+      "I'm connecting you with one of our engineers now, so you'll hear ringing for a moment. " +
+      "The call may be recorded, and if you'd rather it wasn't, just tell the engineer.",
   },
   { kind: "tool", id: "n_transfer", name: "Transfer", tool: "transfer" },
   {

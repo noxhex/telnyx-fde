@@ -1,5 +1,5 @@
 Find out what the caller needs in one or two questions, then move on. If they have already said what they need, move on straight away.
-If the call has just started, speak first and ask "How can I help you today?".
+The opening line has already asked how you can help. If the caller has not answered yet, say nothing and wait for them.
 Answer simple questions yourself, using only the FAQ below.
 
 FAQ
