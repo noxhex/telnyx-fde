@@ -408,10 +408,29 @@ describe("tools/list", () => {
     ]);
     const [verify, area, diagnostics, outage, ticket] = body.result.tools;
     // Written for a voice model: each description says when to use the tool.
-    expect(verify?.description).toContain("before anything that touches their account");
+    // verify_account's and report_outage's are pinned word for word (T26).
+    expect(verify?.description).toBe(
+      "Verifies the caller's identity before anything that touches their account, such as " +
+        "diagnostics or a repair ticket. Call it only once the caller has given every answer it " +
+        "needs. That is the four-digit postcode, and the account number as well when the caller " +
+        "was not recognised by phone number. If an answer is missing, ask the caller for it " +
+        "first. It answers whether the caller is verified, how many attempts remain, or how " +
+        "many minutes verification is locked after too many wrong answers. If it answers " +
+        "account_number_needed or postcode_needed, ask for that answer and try again. If it " +
+        "answers account_number_unclear or postcode_unclear, ask the caller to repeat that " +
+        "answer one character at a time and try again. Never read out full account details " +
+        "yourself.",
+    );
     expect(area?.description).toContain("whenever the caller asks about an outage");
     expect(diagnostics?.description).toContain("internet is down, slow or unstable");
-    expect(outage?.description).toContain("Reports that the caller's own internet is out");
+    expect(outage?.description).toBe(
+      "Reports that the caller's own internet is down completely, so the engineers can see that " +
+        "their area is affected. Use it only when the caller says their service is down completely " +
+        "and has agreed to report it as an outage. Never use it for slow or dropping internet. It " +
+        "answers whether the report was counted, whether it declared an incident, and the estimated " +
+        "fix time. Only a caller recognised by phone number or verified can report. If the result " +
+        "says needs_verification, verify the caller first.",
+    );
     expect(ticket?.description).toContain("needs a technician");
     expect(verify?.inputSchema).toMatchObject({
       type: "object",

@@ -1028,6 +1028,19 @@ describe("AreaIncident actor adapter", () => {
     expect(JSON.stringify(logLines)).not.toContain("DV-100001");
   });
 
+  it("report's actor line carries the count and the threshold for a counted, a duplicate and a declared report (T26)", async () => {
+    const kv = createKvFake(createClockFake(T0).now);
+    const { actor } = makeActor(kv);
+    await actor.report(actorReport({ accountId: "DV-100001", traceId: "trace-1" }));
+    await actor.report(actorReport({ accountId: "DV-100001", nowMs: T0 + 1, traceId: "trace-1" }));
+    await actor.report(actorReport({ accountId: "DV-100002", nowMs: T0 + 2, traceId: "trace-1" }));
+    const lines = logged("actor");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatchObject({ outcome: "counted", reports_in_window: 1, threshold: 2 });
+    expect(lines[1]).toMatchObject({ outcome: "duplicate", reports_in_window: 1, threshold: 2 });
+    expect(lines[2]).toMatchObject({ outcome: "declared", reports_in_window: 2, threshold: 2 });
+  });
+
   it("report without a trace id logs trace_id null", async () => {
     const kv = createKvFake(createClockFake(T0).now);
     const { actor } = makeActor(kv);

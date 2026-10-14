@@ -31,13 +31,12 @@ export const reportOutageInput = z.strictObject({
 export const REPORT_OUTAGE_NAME = "report_outage";
 
 const DESCRIPTION =
-  "Reports that the caller's own internet is out, slow or unstable, adding their account to " +
-  "the outage count for their area. Use it whenever a recognised caller says their connection " +
-  "has a problem, and always during a known outage when they confirm they are affected too. " +
-  "It answers how many distinct reports the area has in the current window, the threshold that " +
-  "declares an incident, whether this report declared it, and the estimated fix time. Only a " +
-  "caller recognised by phone number or verified can report; if the result says " +
-  "needs_verification, verify the caller first.";
+  "Reports that the caller's own internet is down completely, so the engineers can see that " +
+  "their area is affected. Use it only when the caller says their service is down completely " +
+  "and has agreed to report it as an outage. Never use it for slow or dropping internet. It " +
+  "answers whether the report was counted, whether it declared an incident, and the estimated " +
+  "fix time. Only a caller recognised by phone number or verified can report. If the result " +
+  "says needs_verification, verify the caller first.";
 
 const FAILURE_SENTENCE = "The outage reporting system is not responding right now.";
 
@@ -84,9 +83,11 @@ export async function handleReportOutage(
     if (reported === TIMED_OUT) {
       return failure();
     }
+    // T26: the model never hears the raw count — saying "three reports make
+    // an outage" to a caller confused it. The count and the threshold stay
+    // on the AreaIncident actor's `report` log line for the demo and T13's
+    // evidence.
     return json({
-      reports_in_window: reported.reportsInWindow,
-      threshold: reported.threshold,
       counted: reported.counted,
       incident_declared: reported.incidentDeclared,
       incident_id: reported.incidentId,

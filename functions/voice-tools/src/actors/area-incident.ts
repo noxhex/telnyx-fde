@@ -32,9 +32,12 @@
  * any publish.
  *
  * Logging: `report`, `resolve` and `reset` write one `actor` line each with
- * the method, trace id, area, outcome and latency; each KV write writes a
- * `publish` (or `publish_retry`) line carrying the trace id of the change
- * that set the outbox, including writes made by the alarm.
+ * the method, trace id, area, outcome and latency; `report`'s line also
+ * carries the domain result's `reports_in_window` and `threshold` (T26 — the
+ * MCP tool's answer dropped them, so the count still shows in the logs for
+ * the demo and for T13's evidence). Each KV write writes a `publish` (or
+ * `publish_retry`) line carrying the trace id of the change that set the
+ * outbox, including writes made by the alarm.
  */
 
 import { StatefulActor } from "@telnyx/edge-runtime";
@@ -232,7 +235,15 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
         : result.counted
           ? "counted"
           : "duplicate";
-      this._logCall({ method: "report", outcome, timings, traceId: input.traceId, account: input.accountId });
+      this._logCall({
+        method: "report",
+        outcome,
+        timings,
+        traceId: input.traceId,
+        account: input.accountId,
+        reportsInWindow: result.reportsInWindow,
+        threshold: result.threshold,
+      });
       return result;
     } catch (error) {
       this._logCall({ method: "report", outcome: "error", timings, traceId: input.traceId, account: input.accountId, error });
@@ -449,13 +460,19 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
     });
   }
 
-  /** One `actor` line per `report`/`resolve`/`reset` call; errors log before the rethrow. */
+  /**
+   * One `actor` line per `report`/`resolve`/`reset` call; errors log before
+   * the rethrow. `report` also passes the domain result's count and
+   * threshold; the error line stays without them.
+   */
   private _logCall(i: {
     method: "report" | "resolve" | "reset";
     outcome: string;
     timings: Timings;
     traceId?: string;
     account?: string;
+    reportsInWindow?: number;
+    threshold?: number;
     error?: unknown;
   }): void {
     const fields: Fields = {
@@ -468,6 +485,12 @@ export class AreaIncident extends StatefulActor<AreaIncidentEnv> {
     };
     if (i.account !== undefined) {
       fields.account = maskAccount(i.account);
+    }
+    if (i.reportsInWindow !== undefined) {
+      fields.reports_in_window = i.reportsInWindow;
+    }
+    if (i.threshold !== undefined) {
+      fields.threshold = i.threshold;
     }
     if (i.error !== undefined) {
       fields.error = i.error instanceof Error ? i.error.message : String(i.error);

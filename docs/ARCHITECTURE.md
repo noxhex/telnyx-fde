@@ -134,14 +134,14 @@ All tools act on the session behind the bearer token. None of them takes an acco
 
 | Tool | Input | Result | Touches | Node |
 |---|---|---|---|---|
-| `verify_account` | `account_number` (optional for a number match), `postcode`, both cleaned of spoken forms first | verified or not, attempts left, lockout minutes, or a value to repeat | mock-crm, `CustomerAccount.verify`, `Session` | Verify account |
+| `verify_account` | `account_number` (optional for a number match), `postcode`, both cleaned of spoken forms first | verified or not, attempts left, lockout minutes, a value to repeat, or a value still needed | mock-crm, `CustomerAccount.verify`, `Session` | Verify account |
 | `check_area_status` | `postcode` | area name, state, ETA | KV read model, through the memory cache | Verify account |
 | `run_line_diagnostics` | none | line state, signal, last seen, suggestion | mock-crm line test (slow on purpose) | Diagnose |
-| `report_outage` | `symptom` (`no_connection`, `slow`, `intermittent`, `other`) | reports in window, threshold, whether this report declared the incident, ETA | `AreaIncident.report` | Outage help, Diagnose |
+| `report_outage` | `symptom` (`no_connection`, `slow`, `intermittent`, `other`) | whether the report counted, whether it declared the incident, ETA. Since T26 the count and the threshold go only to the actor's `report` log line | `AreaIncident.report` | Outage help, Diagnose |
 | `create_ticket` | `category` (`repair_visit`, `callback`, `other`), `summary` | ticket id, visit window | `CustomerAccount.createTicket` with a dedupe key | Repair ticket, Take message |
 | `subscribe_updates` (stretch) | none | subscribed | `AreaIncident.subscribe` | Outage help |
 
-When the session's identity level is below what a tool needs, the tool returns `needs_verification` instead of failing. A misheard account number or postcode returns `account_number_unclear` or `postcode_unclear`, so the model asks the caller again and nothing counts against them. A failing dependency, and an argument that fails validation, return a tool result with `isError: true` and one short sentence, as the 2025-11-25 spec has it for input validation (SEP-1303). Only an unknown tool or a malformed request gets a JSON-RPC error.
+When the session's identity level is below what a tool needs, the tool returns `needs_verification` instead of failing. A misheard account number or postcode returns `account_number_unclear` or `postcode_unclear`, so the model asks the caller again and nothing counts against them. A missing one returns `account_number_needed` or `postcode_needed` (T26), which counts nothing either. A failing dependency, and an argument that fails validation, return a tool result with `isError: true` and one short sentence, as the 2025-11-25 spec has it for input validation (SEP-1303). Only an unknown tool or a malformed request gets a JSON-RPC error.
 
 ## Call setup latency budget
 

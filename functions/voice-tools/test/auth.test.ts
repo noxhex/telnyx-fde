@@ -176,6 +176,18 @@ const areasNever: AreasClient = {
   reset: () => Promise.reject(new Error("unexpected AREA_INCIDENT.reset")),
 };
 
+/** The stub's one key-parsing path, shared by immediate and held reads. */
+function parseHeldKey(raw: string | null | undefined): Uint8Array | null {
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  try {
+    return parseKey(raw);
+  } catch {
+    return null;
+  }
+}
+
 class SecretsStub implements SecretsDep {
   readonly reads: string[] = [];
   readonly held = new Map<string, HeldPromise<string | null>>();
@@ -195,19 +207,14 @@ class SecretsStub implements SecretsDep {
 
   getKey(handle: string): Promise<Uint8Array | null> {
     this.reads.push(handle);
+    // A held read resolves with whatever the test settles it with: the same
+    // parsing as an immediate value, so a read that lands inside its bound
+    // authenticates and a late read can deliver a real key.
     const heldRead = this.held.get(handle);
     if (heldRead !== undefined) {
-      return heldRead.promise.then(() => null);
+      return heldRead.promise.then((raw) => parseHeldKey(raw));
     }
-    const raw = this.values[handle];
-    if (raw === undefined || raw === null) {
-      return Promise.resolve(null);
-    }
-    try {
-      return Promise.resolve(parseKey(raw));
-    } catch {
-      return Promise.resolve(null);
-    }
+    return Promise.resolve(parseHeldKey(this.values[handle]));
   }
 }
 
@@ -473,13 +480,13 @@ describe("POST /mcp auth, 503s", () => {
     expect(h.sessions.gets).toEqual([]);
   });
 
-  it("a held MCP_TOKEN_KEY read times out at 1,000 ms: 503, and the late answer is absorbed", async () => {
+  it("a held MCP_TOKEN_KEY read times out at the 2,000 ms bound: 503 secret_error, and the late key changes nothing (T26)", async () => {
     const h = makeHarness();
     const heldKey = h.secrets.hold("MCP_TOKEN_KEY");
     const pending = h.post({});
     await tick();
-    // Exactly one timer, for the card's 1,000 ms secret-read timeout.
-    const timer = h.timers.pending().find((e) => e.ms === 1_000);
+    // Exactly one timer, for the card's 2,000 ms secret-read timeout.
+    const timer = h.timers.pending().find((e) => e.ms === 2_000);
     expect(timer).toBeDefined();
     expect(h.sessions.gets).toEqual([]);
     timer?.fire();
@@ -488,9 +495,27 @@ describe("POST /mcp auth, 503s", () => {
     expect(res.body).toEqual(UNAVAILABLE);
     expect(h.sessions.gets).toEqual([]);
     expect(h.lastLog()).toMatchObject({ event: "auth_failed", reason: "secret_error", status: 503 });
-    // The late key arrives after the timeout fired: absorbed quietly.
+    // A valid key arriving after the timeout fired changes nothing: the
+    // request already answered 503 and no session is ever read.
     heldKey.resolve(TOKEN_KEY_RAW);
     await tick();
+    expect(h.sessions.gets).toEqual([]);
+  });
+
+  it("a token key read that settles at the 2,000 ms bound authenticates (T26)", async () => {
+    const h = makeHarness();
+    const heldKey = h.secrets.hold("MCP_TOKEN_KEY");
+    const pending = h.post({});
+    await tick();
+    // The 2,000 ms timer exists but has not fired: a read landing now is at
+    // its bound, inside it, and auth proceeds.
+    const timer = h.timers.pending().find((e) => e.ms === 2_000);
+    expect(timer).toBeDefined();
+    heldKey.resolve(TOKEN_KEY_RAW);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ result: {}, jsonrpc: "2.0", id: 0 });
+    expect(h.sessions.gets).toEqual([SID]);
   });
 
   it("a session read that rejects: 503 session_unavailable", async () => {
@@ -511,7 +536,7 @@ describe("POST /mcp auth, 503s", () => {
     const held = h.sessions.holdGet();
     const pending = h.post({});
     await tick();
-    // Two timers by then: the 1,000 ms key read (already settled) and the
+    // Two timers by then: the 2,000 ms key read (already settled) and the
     // 1,000 ms session read (held). The pending one is the session read.
     const pendingTimers = h.timers.pending();
     expect(pendingTimers).toHaveLength(1);

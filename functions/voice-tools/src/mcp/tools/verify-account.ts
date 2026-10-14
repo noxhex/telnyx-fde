@@ -9,16 +9,22 @@
  * upper-cased with every non-alphanumeric dropped, and `DV` plus six digits
  * or six digits alone becomes `DV-` and the digits (mock-crm's fixture
  * format); the postcode is cleaned the same way with a leading `B` dropped.
- * A value that does not clean answers `account_number_unclear` or
- * `postcode_unclear` — expected outcomes on a phone line, never counted
- * against the caller, so a speech-recognition slip can never lock anyone
- * out. Only the cleaned values go to the CRM, the actor and the session.
+ * An empty or whitespace-only postcode is missing, not misheard: the answer
+ * is `postcode_needed`, the way a missing account number answers
+ * `account_number_needed` (T26). Any other value that does not clean answers
+ * `account_number_unclear` or `postcode_unclear` — expected outcomes on a
+ * phone line, never counted against the caller, so a speech-recognition
+ * slip can never lock anyone out. Only the cleaned values go to the CRM,
+ * the actor and the session.
  *
  * Flow (each hop inside its own timeout from the card's table, every actor
  * call carrying the session's `traceId`):
  *   1. While the session's verify lock is active, answer locked — no CRM
  *      call and no actor call.
- *   2. Clean the account number, choose the account, clean the postcode.
+ *   2. Clean the account number, choose the account, then the postcode: an
+ *      empty or whitespace-only postcode answers `postcode_needed`, any
+ *      other value that does not clean answers `postcode_unclear` — both
+ *      without a call and without counting (T26).
  *   3. `GET /accounts/<number>` on mock-crm. A 404 means the account does
  *      not exist: the failure is counted on the session
  *      (`SESSION.recordVerifyFailure`, which locks after three), and no
@@ -86,13 +92,15 @@ export const VERIFY_ACCOUNT_NAME = "verify_account";
 
 const DESCRIPTION =
   "Verifies the caller's identity before anything that touches their account, such as " +
-  "diagnostics or a repair ticket. Use it as soon as an unverified caller needs an account " +
-  "action. Ask for their four-digit postcode; ask for the account number as well only when " +
-  "the caller was not recognised by phone number. It answers whether the caller is verified, " +
-  "how many attempts remain, or how many minutes verification is locked after too many wrong " +
-  "answers. If it answers account_number_unclear or postcode_unclear, the value was probably " +
-  "misheard: ask the caller to repeat it one character at a time and try again. Never read " +
-  "out full account details yourself.";
+  "diagnostics or a repair ticket. Call it only once the caller has given every answer it " +
+  "needs. That is the four-digit postcode, and the account number as well when the caller " +
+  "was not recognised by phone number. If an answer is missing, ask the caller for it " +
+  "first. It answers whether the caller is verified, how many attempts remain, or how " +
+  "many minutes verification is locked after too many wrong answers. If it answers " +
+  "account_number_needed or postcode_needed, ask for that answer and try again. If it " +
+  "answers account_number_unclear or postcode_unclear, ask the caller to repeat that " +
+  "answer one character at a time and try again. Never read out full account details " +
+  "yourself.";
 
 const FAILURE_SENTENCE = "The verification system is not responding right now.";
 
@@ -199,7 +207,13 @@ export async function handleVerifyAccount(
     return json({ verified: false, account_number_needed: true });
   }
 
-  // 4. Clean the postcode the same way, before it touches anything.
+  // 4. Clean the postcode the same way, before it touches anything. An
+  // empty or whitespace-only value was never given, not misheard (T26):
+  // postcode_needed, like account_number_needed — no call and nothing
+  // counted toward the lockout.
+  if (rawPostcode.trim() === "") {
+    return json({ verified: false, postcode_needed: true });
+  }
   const postcode = cleanPostcode(rawPostcode);
   if (postcode === null) {
     return json({ verified: false, postcode_unclear: true });

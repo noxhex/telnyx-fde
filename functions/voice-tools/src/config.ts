@@ -14,7 +14,13 @@ export const SECRET_HANDLES = {
   internalKey: "INTERNAL_KEY",
 } as const;
 
-export const SECRET_READ_TIMEOUT_MS = 1_000;
+/**
+ * The bound on one secret read. 2,000 ms since T26: a fresh replica's first
+ * read took over 1,000 ms and answered 503 (DEBUGLOG issue 20, 14 October) —
+ * the same bound T24 gave voice-context. Covers the MCP auth's token key
+ * read and the internal key reads.
+ */
+export const SECRET_READ_TIMEOUT_MS = 2_000;
 
 export const TIMEOUTS = {
   /** `SESSION.get` on the MCP path, `SESSION.create` on /internal/sessions. */

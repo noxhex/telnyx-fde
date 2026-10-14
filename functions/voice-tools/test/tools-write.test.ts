@@ -995,15 +995,52 @@ describe("verify_account spoken forms", () => {
     },
   );
 
-  it("a postcode that does not clean to four digits answers postcode_unclear with nothing counted", async () => {
-    const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
-    const answer = await h.callTool("verify_account", { postcode: "86 3" });
-    expect(answer.result).toEqual({ verified: false, postcode_unclear: true });
+  it.each(["86 3", "86", "abcd"])(
+    "a postcode that does not clean to four digits answers postcode_unclear with nothing counted: %s",
+    async (spoken) => {
+      const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+      const answer = await h.callTool("verify_account", { postcode: spoken });
+      expect(answer.result).toEqual({ verified: false, postcode_unclear: true });
+      expect(h.crm.accountCalls).toEqual([]);
+      expect(h.accounts.verifies).toEqual([]);
+      expect(h.sessions.failures).toEqual([]);
+      expect(kvCalls(h)).toEqual([]);
+      expect(answer.logLine).toMatchObject({ outcome: "ok" });
+    },
+  );
+
+  it.each(["", "   "])(
+    "an empty or whitespace-only postcode answers postcode_needed with nothing called or counted (T26): %j",
+    async (spoken) => {
+      const h = makeHarness({ session: makeSession({ identity: "number_match" }) });
+      const answer = await h.callTool("verify_account", { postcode: spoken });
+      expect(answer.result).toEqual({ verified: false, postcode_needed: true });
+      expect(h.crm.accountCalls).toEqual([]);
+      expect(h.accounts.verifies).toEqual([]);
+      expect(h.sessions.failures).toEqual([]);
+      expect(h.sessions.verified).toEqual([]);
+      expect(kvCalls(h)).toEqual([]);
+      // A normal result, not an error: the model asks the caller for it.
+      expect(answer.logLine).toMatchObject({ outcome: "ok" });
+    },
+  );
+
+  it("an empty postcode three times in a row counts nothing: the session and the account stay unlocked (T26)", async () => {
+    const h = makeHarness({
+      session: makeSession({ identity: "anonymous", accountNumber: "DV-100002" }),
+    });
+    for (let i = 0; i < 3; i++) {
+      const answer = await h.callTool("verify_account", { postcode: "" });
+      expect(answer.result).toEqual({ verified: false, postcode_needed: true });
+    }
+    // No failure was ever recorded and no dependency was ever called, so
+    // neither the session lock nor the per-account lockout can exist.
     expect(h.crm.accountCalls).toEqual([]);
     expect(h.accounts.verifies).toEqual([]);
     expect(h.sessions.failures).toEqual([]);
+    expect(h.sessions.verified).toEqual([]);
     expect(kvCalls(h)).toEqual([]);
-    expect(answer.logLine).toMatchObject({ outcome: "ok" });
+    expect(h.sessions.doc?.verify).toEqual({ failures: 0, lockedUntil: null });
   });
 
   it("the session lock still refuses before any cleaning, call or counting", async () => {
@@ -1182,9 +1219,9 @@ describe("report_outage", () => {
       flagsDoc: { incident_threshold: 5, report_window_secs: 900, incident_eta_minutes: 60 },
     });
     const answer = await h.callTool("report_outage", { symptom: "no_connection" });
+    // T26: the answer drops reports_in_window and threshold; exactly these
+    // four keys remain.
     expect(answer.result).toEqual({
-      reports_in_window: 2,
-      threshold: 3,
       counted: true,
       incident_declared: false,
       incident_id: null,
@@ -1215,7 +1252,12 @@ describe("report_outage", () => {
   it("without flags in KV the defaults apply: threshold 3, window 1,800 s, eta 240 min", async () => {
     const h = makeHarness({ session: makeSession({ identity: "verified" }) });
     const answer = await h.callTool("report_outage", { symptom: "slow" });
-    expect(answer.result).toMatchObject({ reports_in_window: 2 });
+    expect(answer.result).toEqual({
+      counted: true,
+      incident_declared: false,
+      incident_id: null,
+      eta: null,
+    });
     expect(h.areas.reports[0]?.input).toMatchObject({
       threshold: 3,
       windowMs: 1_800_000,
@@ -1305,7 +1347,12 @@ describe("report_outage", () => {
     expect(timer).toBeDefined();
     timer?.fire();
     const answer = await pending;
-    expect(answer.result).toMatchObject({ reports_in_window: 2 });
+    expect(answer.result).toEqual({
+      counted: true,
+      incident_declared: false,
+      incident_id: null,
+      eta: null,
+    });
     expect(h.areas.reports[0]?.input).toMatchObject({ threshold: 3, windowMs: 1_800_000 });
     // The flags document arrives after the wait gave up: its success
     // becomes the last good value, and the next call uses it without
@@ -1340,7 +1387,12 @@ describe("report_outage", () => {
     }) as KvFake["get"];
     h.clock.advance(10_000);
     const answer = await h.callTool("report_outage", { symptom: "slow" });
-    expect(answer.result).toMatchObject({ reports_in_window: 2 });
+    expect(answer.result).toEqual({
+      counted: true,
+      incident_declared: false,
+      incident_id: null,
+      eta: null,
+    });
     expect(h.areas.reports[1]?.input.threshold).toBe(5);
     expect(flagsGets(h)).toBe(2);
     // The refresh has not settled and the call never timed out.
