@@ -23,6 +23,27 @@ Skeleton for the review session. Finalise it in T17 once every path works.
 | 6:30 | `scripts/demo.sh flags set crm_fail true`. Call 3 still greets him by name from the KV cache, but diagnostics fail, and the assistant says so and offers a person | Observability, feature flags without a redeploy, the cache absorbing a CRM outage, graceful degradation |
 | 8:00 | Restore the flag with `scripts/demo.sh flags set crm_fail false`. The reviewers call the number themselves as unknown callers, if they like | Unknown caller path |
 
+## Live observability on screen
+
+Three terminals, side by side. The first two stay attached for the whole demo.
+
+```bash
+# 1. Call setup, one line per call: what the call knew and how long it took
+telnyx-edge logs voice-context --tail --type runtime --json \
+  | jq -r --unbuffered '.message | fromjson? | select(.event == "dv" or .event == "disclosure") | [.ts[11:19], .event, .trace_id[0:12], .identity, .area_outage, .repeat_caller, .outcome, .latency_ms.total] | @tsv'
+
+# 2. MCP tool calls, with the time each hop took
+telnyx-edge logs voice-tools --tail --type runtime --json \
+  | jq -r --unbuffered '.message | fromjson? | select(.event == "mcp" and .method == "tools/call") | [.ts[11:19], .trace_id[0:12], .tool, .identity, .outcome, (.latency_ms | tostring)] | @tsv'
+
+# 3. Commands, and the area actor's lines after the simulated reports
+scripts/demo.sh reports 8630 2
+telnyx-edge actors logs AreaIncident --type runtime --since 5m
+scripts/demo.sh flags
+```
+
+The live tail drops its connection about every 10 minutes and reconnects by itself. Lines written during the gap do not show, so a missing line is in `telnyx-edge logs <function> --since 5m`.
+
 ## Walkthrough, 7 to 10 minutes
 
 1. Why this use case, and who it serves.
